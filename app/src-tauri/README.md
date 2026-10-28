@@ -24,10 +24,11 @@ It builds `lustro-scan-helper`, copies it to `binaries/` as a sidecar (installed
 builds the app (whose `build.rs` bakes the helper's SHA-256 into `LUSTRO_HELPER_SHA256`), and writes a
 single installer, `target/release/bundle/nsis/Lustro-Setup-<version>.exe`. It always builds
 unsigned (`tauri build --no-sign`) and refuses to run while a signing key is in the environment,
-so no build script or npm tool can see the key. The release workflow then runs
-`scripts/sign-installer.ps1` in its own step, which signs with the pinned CLI
-(`tauri signer sign --app-version`) and writes `Lustro-Setup-<version>.exe.sig`.
-`scripts/release-assets.ps1` then makes the portable zip, `latest.json` and `SHA256SUMS.txt`.
+so no build script or npm tool can see the key. `scripts/release-assets.ps1` makes the portable zip
+and the release notes. In the release workflow, a separate `sign` job on a fresh runner signs the
+installer with `scripts/sign-installer.ps1` (Tauri CLI fetched by `scripts/fetch-tauri-cli.mjs`
+and checked against the lockfile), and `scripts/release-manifest.ps1` then writes `latest.json`
+and `SHA256SUMS.txt`. See `docs/RELEASING.md`.
 
 The bundle `identifier` is `io.github.silent-diffusion.lustro`. It decides the app's data folders
 and update identity, so don't change it after the first release.
@@ -83,8 +84,8 @@ and update identity, so don't change it after the first release.
 - `requireSignedVersion` is on (we have no old releases), so a manifest can't pair a newer version
   with an older signed package.
 - `createUpdaterArtifacts` is on, but builds run with `--no-sign`; the installer is signed for the
-  updater afterwards by `scripts/sign-installer.ps1`, the only step that gets the
-  `TAURI_SIGNING_PRIVATE_KEY` secret in CI.
+  updater afterwards by `scripts/sign-installer.ps1`, in the release workflow's separate `sign`
+  job, the only job that can read the `TAURI_SIGNING_PRIVATE_KEY` secret.
 - The updater is the default cargo feature `updater` (`tauri-plugin-updater` is optional). The
   portable build uses `--no-default-features --features portable`, so the plugin isn't linked.
 - Auto-update (default on): check 5 s after launch and every 24 h, download in the background, install

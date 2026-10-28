@@ -41,6 +41,19 @@ const UNDO_FILE: &str = "undo-log.json";
 const SUGGESTIONS_FILE: &str = "suggestions.json";
 const SNAPSHOTS_FILE: &str = "snapshots.sqlite";
 
+/// Every file in the data dir that can hold paths or file names, including SQLite's side files
+/// and `write_atomic` leftovers. Settings (config dir) are cleared field by field instead.
+const HISTORY_FILES: &[&str] = &[
+    SNAPSHOTS_FILE,
+    "snapshots.sqlite-journal",
+    "snapshots.sqlite-wal",
+    "snapshots.sqlite-shm",
+    UNDO_FILE,
+    "undo-log.tmp",
+    SUGGESTIONS_FILE,
+    "suggestions.tmp",
+];
+
 impl AppState {
     pub fn new(config_dir: &Path, data_dir: &Path) -> Self {
         let read = |name: &str| std::fs::read_to_string(data_dir.join(name)).ok();
@@ -114,6 +127,50 @@ impl AppState {
         }
     }
 
+    /// Forgets everything that names files: snapshots, cleanup (undo) history, saved
+    /// suggestions and "keep" decisions. The files are deleted, not emptied. The user's own
+    /// excluded and protected folders stay in the settings. Items already in the trash stay
+    /// there but can no longer be undone from the app.
+    pub fn clear_history(&self) -> Result<(), String> {
+        if self.scans.is_running() || self.applying.swap(true, Ordering::SeqCst) {
+            return Err("Wait for the scan or cleanup to finish".into());
+        }
+        // Holds the "applying" flag so no cleanup or undo starts meanwhile.
+        struct Release<'a>(&'a AtomicBool);
+        impl Drop for Release<'_> {
+            fn drop(&mut self) {
+                self.0.store(false, Ordering::SeqCst);
+            }
+        }
+        let _release = Release(&self.applying);
+        {
+            // Close the database so its file can be deleted; it reopens empty on next use.
+            let mut store = lock(&self.store);
+            match &self.data_dir {
+                Some(_) => *store = None,
+                None => {
+                    if let Some(s) = store.as_mut() {
+                        s.clear_all().map_err(|_| "Couldn't clear the history")?;
+                    }
+                }
+            }
+            *lock(&self.undo) = UndoLog::new();
+            lock(&self.saved_suggestions).clear();
+            if let Some(dir) = &self.data_dir {
+                for name in HISTORY_FILES {
+                    match std::fs::remove_file(dir.join(name)) {
+                        Ok(()) => {}
+                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                        Err(_) => return Err("Couldn't clear the history".into()),
+                    }
+                }
+            }
+        }
+        self.settings.update(|s| s.kept_items.clear())?;
+        self.scans.clear_deltas();
+        Ok(())
+    }
+
     pub fn add_picked(&self, p: &Path) {
         if let Some(k) = path_key(p) {
             lock(&self.picked).insert(k);
@@ -132,4 +189,100 @@ fn dev_root() -> Option<PathBuf> {
     }
     let p = PathBuf::from(std::env::var_os("LUSTRO_DEV_SCAN_ROOT")?);
     (p.is_absolute() && p.is_dir()).then_some(p)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lustro_core::cleanup::{Action, UndoItem};
+    use lustro_core::fixtures::Fixture;
+    use lustro_core::insights::{suggest, InsightOptions};
+    use lustro_core::snapshot::SaveOptions;
+
+    /// Fills every store with fake data, then checks `clear_history` leaves no file that
+    /// names a path, while the user's own excluded folders stay.
+    #[test]
+    fn clear_history_deletes_everything_that_names_files() {
+        let (config, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let fake = if cfg!(windows) {
+            r"C:\Users\William\Videos\old.mkv"
+        } else {
+            "/home/william/Videos/old.mkv"
+        };
+        let tree = Fixture::small().tree();
+        let st = AppState::new(config.path(), data.path());
+        st.with_store(|s| {
+            s.save(&tree, 1, None, SaveOptions::default())
+                .map(|_| ())
+                .map_err(|e| e.to_string())
+        })
+        .unwrap();
+        let list = suggest(&tree, &InsightOptions::new(1), &[]);
+        assert!(!list.is_empty());
+        st.save_suggestions(&list);
+        let record = serde_json::json!({
+            "id": "u1-1", "at": 1, "destination": { "kind": "trash" },
+            "items": [UndoItem {
+                original: fake.into(), location: None, token: None, bytes: 1,
+                action: Action::Trash, undoable: true, restored: false,
+            }],
+        });
+        let log = UndoLog::from_json(
+            &serde_json::json!({ "records": [record], "seq": 1, "keep": 100 }).to_string(),
+        )
+        .unwrap();
+        st.save_undo(&log);
+        *lock(&st.undo) = log;
+        st.settings
+            .update(|s| {
+                s.kept_items.push(fake.into());
+                s.excluded.push(fake.into());
+            })
+            .unwrap();
+        for name in ["undo-log.tmp", "suggestions.tmp"] {
+            std::fs::write(data.path().join(name), fake).unwrap();
+        }
+        for name in [SNAPSHOTS_FILE, UNDO_FILE, SUGGESTIONS_FILE] {
+            assert!(data.path().join(name).exists(), "{name}");
+        }
+
+        st.clear_history().unwrap();
+
+        let left: Vec<_> = std::fs::read_dir(data.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert!(left.is_empty(), "{left:?}");
+        assert!(lock(&st.undo).entries().is_empty());
+        assert!(lock(&st.saved_suggestions).is_empty());
+        let s = st.settings.get();
+        assert!(s.kept_items.is_empty());
+        assert_eq!(s.excluded, vec![fake.to_string()]);
+        let settings = std::fs::read_to_string(config.path().join("settings.json")).unwrap();
+        assert!(!settings.contains("keptItems\":[\""), "{settings}");
+        // The history opens again, empty.
+        assert!(st
+            .with_store(|s| s
+                .list(&tree.root_display().unwrap().to_string_lossy())
+                .map_err(|e| e.to_string()))
+            .unwrap()
+            .is_empty());
+
+        // A fresh start finds nothing either.
+        drop(st);
+        let again = AppState::new(config.path(), data.path());
+        assert!(lock(&again.undo).entries().is_empty());
+        assert!(lock(&again.saved_suggestions).is_empty());
+    }
+
+    #[test]
+    fn clear_history_waits_for_a_cleanup() {
+        let st = AppState::in_memory();
+        st.applying.store(true, Ordering::SeqCst);
+        assert!(st.clear_history().is_err());
+        assert!(st.applying.load(Ordering::SeqCst), "flag left to its owner");
+        st.applying.store(false, Ordering::SeqCst);
+        st.clear_history().unwrap();
+        assert!(!st.applying.load(Ordering::SeqCst));
+    }
 }

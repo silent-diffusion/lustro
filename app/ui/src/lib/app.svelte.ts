@@ -352,6 +352,16 @@ class AppState {
     try { localStorage.setItem("lustro-cleanup", JSON.stringify([...m])); } catch { /* storage unavailable */ }
   }
 
+  /** Settings → "Clear history": the backend deletes everything with file names (snapshots, undo log, saved
+   *  suggestions, Keep decisions); the review decisions kept here go too. Screens refetch through `changed()`. */
+  async clearHistory() {
+    await this.backend.clearHistory();
+    this.setCleanupDecisions(new Map());
+    this.cleanupCursor = 0;
+    this.settings = await this.backend.getSettings();
+    await this.changed();
+  }
+
   private loadCleanupDecisions() {
     try {
       const raw = localStorage.getItem("lustro-cleanup");

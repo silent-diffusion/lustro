@@ -542,15 +542,7 @@ pub async fn diff(
 
 #[tauri::command]
 pub async fn clear_history(state: State<'_, AppState>) -> Res<()> {
-    if state.scans.is_running() {
-        return Err("Wait for the scan to finish".into());
-    }
-    state.with_store(|s| {
-        s.clear_all()
-            .map_err(|_| "Couldn't clear the history".into())
-    })?;
-    state.scans.clear_deltas();
-    Ok(())
+    state.clear_history()
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -888,7 +880,20 @@ mod tests {
 
     #[test]
     fn finds_tree_paths_only_inside_the_root() {
-        let tree = Fixture::small().tree();
+        use lustro_core::fixtures::{FixturePlatform, FixtureSpec};
+        // A tree of this OS: `C:\` is not an absolute path on Unix.
+        let platform = if cfg!(windows) {
+            FixturePlatform::Windows
+        } else if cfg!(target_os = "macos") {
+            FixturePlatform::Macos
+        } else {
+            FixturePlatform::Linux
+        };
+        let tree = Fixture::generate(FixtureSpec {
+            platform,
+            ..FixtureSpec::default()
+        })
+        .tree();
         let root = tree.root_display().unwrap();
         assert_eq!(tree_node_at(&tree, &root), tree.root_id());
         let some = tree.iter().find(|n| n.parent.is_some()).unwrap().id;
@@ -947,13 +952,17 @@ mod tests {
             fn done(&self, _: &ScanDone) {}
         }
         let dir = tempfile::tempdir().unwrap();
+        // CI's temp dir is spelled with 8.3 short names (`RUNNER~1`); the Recycle Bin records
+        // long names, so restore would not find the item. The app only scans roots from the
+        // volume list or the folder picker, which are long, so scan the long spelling too.
+        let root = long_path(dir.path());
         std::fs::create_dir(dir.path().join("Temp")).unwrap();
         std::fs::write(dir.path().join("Temp").join("old.tmp"), vec![0u8; 11 << 20]).unwrap();
         std::fs::write(dir.path().join("keep.txt"), b"keep").unwrap();
 
         let st = AppState::in_memory();
         let req = ScanRequest {
-            root: dir.path().to_string_lossy().into_owned(),
+            root: root.to_string_lossy().into_owned(),
             mode: lustro_core::scan::ScanMode::Standard,
             cross_filesystems: false,
             include_remote: false,
@@ -1005,8 +1014,18 @@ mod tests {
             let id = log.entries()[0].id.clone();
             log.undo(&id, &PlatformTrash::new()).unwrap()
         };
-        assert!(failed.is_empty());
+        // Reasons only: the paths are the runner's.
+        let reasons: Vec<&str> = failed.iter().map(|f| f.message.as_str()).collect();
+        assert!(failed.is_empty(), "undo failed: {reasons:?}");
         assert!(dir.path().join("Temp").join("old.tmp").exists());
+    }
+
+    /// `canonicalize` without the `\\?\` prefix: long names, as the folder picker returns.
+    #[cfg(windows)]
+    fn long_path(p: &Path) -> PathBuf {
+        let c = std::fs::canonicalize(p).unwrap();
+        let s = c.to_string_lossy();
+        PathBuf::from(s.strip_prefix(r"\\?\").unwrap_or(&s))
     }
 
     #[test]

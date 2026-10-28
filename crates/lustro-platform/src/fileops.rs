@@ -51,15 +51,18 @@ pub(crate) fn to_io(e: TrashError) -> io::Error {
     io::Error::new(kind, e.to_string())
 }
 
-/// Outcome of a trash: the token is the deletion time (Unix seconds) for `restore`.
-fn trashed_now() -> Outcome {
+/// Outcome of a trash. The token is `"<deletion time> <final path>"`: the time (Unix
+/// seconds) picks the right item when a path was trashed more than once, and the final
+/// path (long names on Windows) is what the trash records, so `restore` matches it even
+/// when the item was trashed through an 8.3 short path.
+fn trashed_now(full: &Path) -> Outcome {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0);
     Outcome {
         location: None,
-        token: Some(now.to_string()),
+        token: Some(format!("{now} {}", full.to_string_lossy())),
         undoable: CAN_RESTORE,
         freed_bytes: None,
     }
@@ -101,8 +104,8 @@ impl FileOps for PlatformTrash {
     /// Moves to the trash. The token is the deletion time (Unix seconds), used by `restore`
     /// to pick the right item when the same path was trashed more than once.
     fn trash(&self, path: &Path) -> io::Result<Outcome> {
-        self.move_to_trash(path).map_err(to_io)?;
-        Ok(trashed_now())
+        let full = self.trash_final(path, None).map_err(to_io)?;
+        Ok(trashed_now(&full))
     }
 
     /// Trashes only if the item is still the one reviewed; a mismatch fails with "changed
@@ -110,8 +113,8 @@ impl FileOps for PlatformTrash {
     /// delete has run, but the shell re-opens by path, so a tiny rename window remains
     /// (see [`PlatformTrash::move_to_trash_checked`]); the Recycle Bin guard still applies.
     fn trash_checked(&self, path: &Path, expected: &ItemIdentity) -> io::Result<Outcome> {
-        self.move_to_trash_checked(path, expected).map_err(to_io)?;
-        Ok(trashed_now())
+        let full = self.trash_final(path, Some(expected)).map_err(to_io)?;
+        Ok(trashed_now(&full))
     }
 
     fn move_to(&self, _path: &Path, _target_dir: &Path) -> io::Result<Outcome> {
@@ -191,14 +194,34 @@ fn restore_from_trash(item: &UndoItem) -> io::Result<()> {
     use lustro_cloud::rules::Os;
 
     let ci = Os::current().case_insensitive();
-    let want = paths::key(&item.original.to_string_lossy(), ci);
-    let deleted_at: Option<i64> = item.token.as_deref().and_then(|t| t.parse().ok());
+    // Older tokens are just the time; newer ones also carry the final path.
+    let (time, trashed_from) = match item.token.as_deref() {
+        Some(t) => t
+            .split_once(' ')
+            .map_or((Some(t), None), |(a, b)| (Some(a), Some(b))),
+        None => (None, None),
+    };
+    let deleted_at: Option<i64> = time.and_then(|t| t.parse().ok());
+    // A newer token names exactly the path that was trashed; only that matches. For an
+    // older time-only token: the path as given, or with its folder made long and final
+    // (8.3 names expanded, links resolved, as the trash records it).
+    let want: Vec<String> = match trashed_from {
+        Some(p) => vec![p.to_owned()],
+        None => std::iter::once(item.original.clone())
+            .chain(long_form(&item.original))
+            .map(|p| p.to_string_lossy().into_owned())
+            .collect(),
+    };
+    let want: Vec<String> = want.iter().map(|w| paths::key(w, ci)).collect();
     let items =
         trash::os_limited::list().map_err(|_| io::Error::other("couldn't read the trash"))?;
-    // Same original path; if trashed several times, the one closest to our deletion time.
+    // Same original path, and deleted within RESTORE_WINDOW_SECS of our deletion time
+    // (when known), so an older item the user trashed from the same path is never picked.
+    // If several remain, the one closest to our deletion time.
     let found = items
         .into_iter()
-        .filter(|t| paths::key(&t.original_path().to_string_lossy(), ci) == want)
+        .filter(|t| want.contains(&paths::key(&t.original_path().to_string_lossy(), ci)))
+        .filter(|t| deleted_at.is_none_or(|d| (t.time_deleted - d).abs() <= RESTORE_WINDOW_SECS))
         .min_by_key(|t| deleted_at.map_or(-t.time_deleted, |d| (t.time_deleted - d).abs()))
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "item is no longer in the trash"))?;
     trash::os_limited::restore_all([found]).map_err(|e| match e {
@@ -208,6 +231,33 @@ fn restore_from_trash(item: &UndoItem) -> io::Result<()> {
         ),
         _ => io::Error::other("couldn't restore the item"),
     })
+}
+
+/// How far a trash entry's deletion time may be from ours and still count as our item.
+#[cfg_attr(not(any(windows, target_os = "linux")), allow(dead_code))]
+const RESTORE_WINDOW_SECS: i64 = 120;
+
+/// `path` with its folder canonicalized (metadata only; the item itself is gone) and, on
+/// Windows, the `\\?\` prefix dropped from drive paths.
+#[cfg(any(
+    windows,
+    all(
+        unix,
+        not(target_os = "macos"),
+        not(target_os = "ios"),
+        not(target_os = "android")
+    )
+))]
+fn long_form(path: &Path) -> Option<std::path::PathBuf> {
+    let folder = std::fs::canonicalize(path.parent()?).ok()?;
+    let full = folder.join(path.file_name()?);
+    if cfg!(windows) && crate::recycle::is_drive_letter_path(&full) {
+        let s = full.to_string_lossy();
+        if let Some(rest) = s.strip_prefix(r"\\?\") {
+            return Some(rest.into());
+        }
+    }
+    Some(full)
 }
 
 #[cfg(not(any(
@@ -424,6 +474,135 @@ mod tests {
                 io::ErrorKind::Unsupported
             );
         }
+    }
+
+    /// Regression: an item trashed through an 8.3 short path must be found again by undo,
+    /// both from the token's final path and (for older tokens) by expanding the folder.
+    #[cfg(windows)]
+    #[test]
+    fn trash_through_a_short_path_then_restore() {
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path().join("VeryLongUndoFolderName");
+        std::fs::create_dir(&folder).unwrap();
+        let short = dir.path().join("VERYLO~1");
+        if !short.exists() {
+            eprintln!("8.3 names are off on this volume; skipping");
+            return;
+        }
+        let o = ops(None);
+        for old_token in [false, true] {
+            let f = folder.join("x.txt");
+            std::fs::write(&f, b"short path undo").unwrap();
+            let via = short.join("x.txt");
+            let id = o.stat_identity(&via).unwrap().unwrap();
+            let out = o.trash_checked(&via, &id).unwrap();
+            assert!(!f.exists());
+            let token = if old_token {
+                out.token
+                    .as_deref()
+                    .and_then(|t| t.split_once(' '))
+                    .map(|(t, _)| t.to_owned())
+            } else {
+                out.token
+            };
+            let item = UndoItem {
+                original: via.clone(),
+                location: out.location,
+                token,
+                bytes: 15,
+                action: Action::Trash,
+                undoable: out.undoable,
+                restored: false,
+            };
+            o.restore(&item).unwrap();
+            assert_eq!(std::fs::read(&f).unwrap(), b"short path undo");
+        }
+    }
+
+    /// Trashes a fresh temp file; returns it and its undo item.
+    fn trashed_temp(dir: &Path, name: &str) -> (std::path::PathBuf, UndoItem) {
+        let f = dir.join(name);
+        std::fs::write(&f, b"window").unwrap();
+        let out = ops(None).trash(&f).unwrap();
+        let item = UndoItem {
+            original: f.clone(),
+            location: out.location,
+            token: out.token,
+            bytes: 6,
+            action: Action::Trash,
+            undoable: out.undoable,
+            restored: false,
+        };
+        (f, item)
+    }
+
+    /// A bin item with the same path but deleted well outside the window isn't ours.
+    #[test]
+    fn restore_ignores_an_item_deleted_outside_the_window() {
+        if !CAN_RESTORE {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let (f, item) = trashed_temp(&long(dir.path()), "lustro-window-test.txt");
+        let token = item.token.clone().unwrap();
+        let (secs, path) = token.split_once(' ').unwrap();
+        let old = secs.parse::<i64>().unwrap() - 10 * RESTORE_WINDOW_SECS;
+        for t in [format!("{old} {path}"), old.to_string()] {
+            let stale = UndoItem {
+                token: Some(t),
+                ..item.clone()
+            };
+            assert_eq!(
+                ops(None).restore(&stale).unwrap_err().kind(),
+                io::ErrorKind::NotFound
+            );
+        }
+        assert!(!f.exists());
+        // Our own token still finds it (and cleans up).
+        ops(None).restore(&item).unwrap();
+        assert!(f.exists());
+    }
+
+    /// With a path in the token, only that exact path matches: `original` and its long
+    /// form aren't tried.
+    #[test]
+    fn restore_with_a_path_token_uses_only_that_path() {
+        if !CAN_RESTORE {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let (f, item) = trashed_temp(&long(dir.path()), "lustro-exact-test.txt");
+        let token = item.token.clone().unwrap();
+        let (secs, _) = token.split_once(' ').unwrap();
+        let elsewhere = long(dir.path()).join("some-other-name.txt");
+        let wrong = UndoItem {
+            token: Some(format!("{secs} {}", elsewhere.display())),
+            ..item.clone()
+        };
+        assert_eq!(
+            ops(None).restore(&wrong).unwrap_err().kind(),
+            io::ErrorKind::NotFound
+        );
+        assert!(!f.exists());
+        if cfg!(windows) {
+            // Case doesn't matter on Windows.
+            let upper = UndoItem {
+                token: Some(format!("{secs} {}", f.to_string_lossy().to_uppercase())),
+                original: elsewhere,
+                ..item.clone()
+            };
+            ops(None).restore(&upper).unwrap();
+        } else {
+            ops(None).restore(&item).unwrap();
+        }
+        assert!(f.exists());
+    }
+
+    /// The canonical form of a temp folder, without `\\?\`, as the trash records it.
+    fn long(p: &Path) -> std::path::PathBuf {
+        let c = std::fs::canonicalize(p).unwrap();
+        let s = c.to_string_lossy();
+        std::path::PathBuf::from(s.strip_prefix(r"\\?\").unwrap_or(&s).to_string())
     }
 
     #[test]

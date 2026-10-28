@@ -255,8 +255,14 @@ export class MockBackend implements Backend {
     if (!cancelled) {
       this.hasScan = true;
       // A re-scan refreshes the latest snapshot (the fake tree doesn't change between scans).
+      // After "Clear history" (or on a fresh start) there is none: this scan starts a new history.
+      const now = Math.floor(Date.now() / 1000);
+      if (!this.snaps.length) {
+        const usedBytes = this.usedBytes();
+        this.snaps.push({ meta: { id: `snap-${now}`, root: this.t.world.rootPath, takenAt: now, allocatedBytes: usedBytes, fileCount: this.t.fileCount[0] }, usedBytes, latest: true });
+      }
       const latest = this.snaps[this.snaps.length - 1];
-      latest.meta.takenAt = Math.floor(Date.now() / 1000);
+      latest.meta.takenAt = now;
       snapshotId = latest.meta.id;
     }
     const fellBack = mode === "fast" && this.opts.fastFallback;
@@ -785,9 +791,15 @@ export class MockBackend implements Backend {
     this.saveSettings();
   }
 
+  /** Deletes everything that holds file names: every snapshot, the Cleanup undo log, the saved suggestions and
+   *  the Keep decisions. Items already in the trash stay there; they just can't be undone from Lustro any more.
+   *  The current scan stays in memory (tree and suggestion list) until the next scan. */
   async clearHistory(): Promise<void> {
-    this.snaps = this.snaps.filter((s) => s.latest);
+    if (this.scan || this.applying) throw new Error("Wait for the scan or cleanup to finish");
+    this.snaps = [];
     this.undoRecords = [];
+    this.settings = { ...this.settings, keptItems: [] };
+    this.saveSettings();
   }
 
   // ---- Updates (simulated; the real app uses the signed updater against GitHub Releases) ----

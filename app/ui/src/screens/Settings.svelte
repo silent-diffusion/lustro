@@ -60,12 +60,20 @@
   }
 
   let confirmClear = $state(false);
+  let clearing = $state(false);
   async function clearAll() {
-    await app.backend.clearHistory();
-    confirmClear = false;
-    app.say("Snapshots and cleanup history deleted");
-    await app.changed();
+    clearing = true;
+    try {
+      await app.clearHistory();
+      confirmClear = false;
+      app.say("History cleared");
+    } catch (e) {
+      app.say(`Nothing was cleared: ${e instanceof Error ? e.message : String(e)}`, 5000);
+    } finally {
+      clearing = false;
+    }
   }
+  const focus = (el: HTMLElement) => { el.focus(); };
 
   const up = $derived(app.update);
   const date = (t: number) => new Date(t * 1000).toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric", timeZone: "UTC" });
@@ -224,11 +232,7 @@
           {#each [4, 8, 12, 24, 52] as n (n)}<option value={n}>Last {n}</option>{/each}
         </select></div>
       <div class="opt"><div>Stored at<small class="mono">{app.w.snapshotDir} · on this computer only</small></div>
-        {#if confirmClear}
-          <span class="btnrow"><button class="btn small" onclick={() => (confirmClear = false)}>Cancel</button><button class="btn small danger" onclick={clearAll}>Delete all</button></span>
-        {:else}
-          <button class="btn small" onclick={() => (confirmClear = true)}>Delete all snapshots</button>
-        {/if}
+        <button class="btn small" disabled={app.busy} onclick={() => (confirmClear = true)}>Clear history…</button>
       </div>
     </section>
 
@@ -327,7 +331,7 @@
           {:else}<b>No file contents are read.</b> “Find duplicate files” is off, so Lustro only reads file names, sizes and dates.{/if}
         </li>
         <li>No account or sign-in.</li>
-        <li>Scan snapshots stay in your user folder and are never shared.</li>
+        <li><b>Everything with file names stays on this computer.</b> Scan history, What grew snapshots, saved Cleanup suggestions, kept items and Cleanup history are stored only in your user folder and never shared. Snapshots → “Clear history…” deletes all of them.</li>
         <li>Exports (CSV/JSON) include full paths. Review them before sharing.</li>
       </ul>
     </section>
@@ -373,6 +377,30 @@
   </div>
 </div>
 
+<svelte:window onkeydown={(e) => confirmClear && !clearing && e.key === "Escape" && (confirmClear = false)} />
+
+{#if confirmClear}
+  <div class="modal-bg" role="presentation" onclick={(e) => e.target === e.currentTarget && !clearing && (confirmClear = false)}>
+    <div class="card dlg" role="dialog" aria-modal="true" aria-labelledby="clear-title" tabindex="-1">
+      <div class="card-head"><div class="ic"><Icon name="clock" size={18} /></div><h2 id="clear-title">Clear history?</h2></div>
+      <p>This deletes everything Lustro keeps that contains file names:</p>
+      <ul>
+        <li>Scan history and What grew snapshots</li>
+        <li>Saved Cleanup suggestions</li>
+        <li>Items you chose to keep. They may be suggested again after the next scan.</li>
+        <li>Cleanup history</li>
+      </ul>
+      <p class="warnline"><Icon name="info" size={14} /><span>This also clears Cleanup history, so items already in the {app.w.trash} can no longer be undone from Lustro (you can still restore them from the {app.w.trash}).</span></p>
+      <p class="faint xs">Excluded and protected folders stay in Settings. The current scan stays open until you scan again, and that scan starts a new history.</p>
+      <div class="foot">
+        <span class="sp"></span>
+        <button class="btn" use:focus disabled={clearing} onclick={() => (confirmClear = false)}>Cancel</button>
+        <button class="btn danger" disabled={clearing} onclick={clearAll}>{clearing ? "Clearing…" : "Clear history"}</button>
+      </div>
+    </div>
+  </div>
+{/if}
+
 <style>
   .st { grid-template-columns: 220px minmax(0, 1fr); align-items: start; }
   .side { position: sticky; top: 16px; display: grid; gap: 2px; padding: 10px; }
@@ -400,7 +428,6 @@
   .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; font-size: var(--fs-sm); }
   .cols ul { margin: 6px 0 0; padding-left: 18px; color: var(--text-2); }
   .btnrow { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
-  .opt .btnrow { margin-top: 0; }
   .progress { height: 6px; border-radius: 3px; background: var(--surface-3); overflow: hidden; margin-top: 10px; }
   .progress i { display: block; height: 100%; background: var(--accent); transition: width .2s; }
   .inl { display: inline-flex; gap: 8px; align-items: center; flex-wrap: wrap; }
@@ -412,6 +439,16 @@
   .privacy { background: color-mix(in srgb, var(--lime) 6%, var(--surface-1)); }
   .privacy ul { margin: 8px 0 0; padding-left: 18px; color: var(--text-2); }
   .privacy li { margin: 4px 0; }
+  .modal-bg { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: grid; place-items: center; z-index: 65; padding: 16px; }
+  .dlg { width: min(480px, 100%); }
+  .dlg p { margin: 0 0 8px; }
+  .dlg ul { margin: 0 0 12px; padding-left: 18px; color: var(--text-2); }
+  .dlg li { margin: 3px 0; }
+  .warnline { display: flex; gap: 8px; align-items: flex-start; color: var(--amber); font-size: var(--fs-sm); }
+  .warnline :global(svg) { flex: none; margin-top: 3px; }
+  .dlg .xs { font-size: var(--fs-xs); }
+  .foot { display: flex; align-items: center; gap: 8px; margin-top: 16px; }
+  .sp { flex: 1; }
   .dev { border-style: dashed; box-shadow: none; }
   @media (max-width: 1000px) { .st { grid-template-columns: 1fr; } .side { position: static; grid-auto-flow: column; overflow-x: auto; } .tiles { grid-template-columns: 1fr 1fr; } .cols { grid-template-columns: 1fr; } }
 </style>

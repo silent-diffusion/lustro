@@ -3,6 +3,15 @@ name: Release
 # Push a tag like v0.1.0 to build the Windows installer, the portable zip and the signed updater
 # manifest, and attach them to a *draft* GitHub Release. A maintainer reviews and publishes it;
 # only then does the app's update check (releases/latest/download/latest.json) see it.
+#
+# Three jobs, so the updater's private key never shares a runner with the build:
+#   build    no secrets: builds the unsigned installer and the portable zip from the source tree.
+#   sign     environment `release` (required reviewers, the only place the key exists), on a fresh
+#            runner with only sign-installer.ps1, the Tauri CLI fetched and checked against the
+#            lockfile, and the unsigned installer artifact. Uploads only the .sig.
+#   release  no secrets: latest.json, checksums and the draft release from the artifacts.
+# The installer's SHA-256 is recorded in `build` and checked in every later job, so the .sig is
+# over exactly the bytes that get published.
 
 on:
   push:
@@ -20,15 +29,13 @@ env:
 
 jobs:
   build:
-    name: Build Windows release
+    name: Build (unsigned)
     runs-on: windows-latest
-    # The signing secrets live in this environment; protect it with required reviewers and a
-    # tag rule (v*) in Settings → Environments.
-    environment: release
     permissions:
       contents: read
     outputs:
       version: ${{ steps.version.outputs.version }}
+      installer_sha256: ${{ steps.hash.outputs.installer_sha256 }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -63,31 +70,17 @@ jobs:
         working-directory: app/ui
         run: npm ci
 
-      # No signing key here: the build runs every dependency's build script, proc macro and npm
-      # tool, so it builds unsigned (`tauri build --no-sign`) and refuses to run if a key is set.
+      # `tauri build --no-sign`; refuses to run if a signing key is in the environment.
       - name: Build installer (unsigned)
         shell: pwsh
         run: ./app/src-tauri/scripts/build-installer.ps1
 
-      # Only this step sees the signing key, and it runs only the pinned Tauri CLI
-      # (`tauri signer sign --app-version`). It fails unless the version-bound .sig exists.
-      # The job's token is read-only.
-      - name: Sign installer for the updater
-        shell: pwsh
-        env:
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: ./app/src-tauri/scripts/sign-installer.ps1 -Version "${{ steps.version.outputs.version }}"
-
-      # latest.json is generated here, after signing, from the .sig (-RequireSigning: no .sig, no release).
-      - name: Portable zip, latest.json, checksums, release notes
+      - name: Portable zip and release notes
         shell: pwsh
         run: >-
           ./app/src-tauri/scripts/release-assets.ps1
           -Version "${{ steps.version.outputs.version }}"
           -OutDir release-out
-          -Repo "${{ github.repository }}"
-          -RequireSigning
 
       # The helper was built fresh above (binaries/ is git-ignored and nothing is cached); fail the
       # release unless both app exes pin exactly that build's SHA-256.
@@ -97,6 +90,23 @@ jobs:
           ./app/src-tauri/scripts/check-helper-hash.ps1
           -AppExe target/release/lustro.exe, target/portable/release/lustro.exe
 
+      - name: Record the installer's SHA-256
+        id: hash
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          $hash = (Get-FileHash "release-out/assets/Lustro-Setup-$env:VERSION.exe" -Algorithm SHA256).Hash.ToLowerInvariant()
+          "installer_sha256=$hash" >> $env:GITHUB_OUTPUT
+          Write-Output "Lustro-Setup-$env:VERSION.exe  $hash"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: unsigned-installer
+          path: release-out/assets/Lustro-Setup-${{ steps.version.outputs.version }}.exe
+          if-no-files-found: error
+          retention-days: 7
+
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-out
@@ -104,17 +114,109 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  sign:
+    name: Sign installer for the updater
+    needs: build
+    runs-on: ubuntu-latest
+    # The signing secrets exist only in this environment. Protect it with required reviewers and
+    # a deployment rule for tags v* (see docs/RELEASING.md).
+    environment: release
+    permissions:
+      contents: read
+    steps:
+      # Only the two files this job runs and the lockfile that pins the CLI, from the tagged commit.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            app/ui/package-lock.json
+            app/src-tauri/scripts/fetch-tauri-cli.mjs
+            app/src-tauri/scripts/sign-installer.ps1
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+
+      # Just @tauri-apps/cli and its native package, each checked against the lockfile's sha512.
+      - name: Fetch the pinned Tauri CLI
+        id: cli
+        run: |
+          tauri_js="$(node app/src-tauri/scripts/fetch-tauri-cli.mjs app/ui/package-lock.json "$RUNNER_TEMP/tauri-cli")"
+          echo "tauri_js=$tauri_js" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: unsigned-installer
+          path: signing
+
+      - name: Verify the installer is the one built
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+          EXPECTED: ${{ needs.build.outputs.installer_sha256 }}
+        run: echo "${EXPECTED}  signing/Lustro-Setup-${VERSION}.exe" | sha256sum --check --strict
+
+      # The only step with the key. Fails unless the version-bound .sig exists and the installer
+      # is unchanged.
+      - name: Sign
+        shell: pwsh
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          VERSION: ${{ needs.build.outputs.version }}
+          TAURI_JS: ${{ steps.cli.outputs.tauri_js }}
+        run: >-
+          ./app/src-tauri/scripts/sign-installer.ps1
+          -Installer "signing/Lustro-Setup-$env:VERSION.exe"
+          -Version $env:VERSION
+          -TauriJs $env:TAURI_JS
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: installer-sig
+          path: signing/Lustro-Setup-${{ needs.build.outputs.version }}.exe.sig
+          if-no-files-found: error
+          retention-days: 7
+
   release:
     name: Create draft GitHub Release
-    needs: build
+    needs: [build, sign]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            app/src-tauri/scripts/release-manifest.ps1
+
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: release-out
           path: release-out
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: installer-sig
+          path: release-out/assets
+
+      # Checks the installer's SHA-256 against the build job's, then writes latest.json from the
+      # .sig and SHA256SUMS.txt over every asset.
+      - name: latest.json and checksums
+        shell: pwsh
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+          EXPECTED: ${{ needs.build.outputs.installer_sha256 }}
+          REPO: ${{ github.repository }}
+        run: >-
+          ./app/src-tauri/scripts/release-manifest.ps1
+          -Version $env:VERSION
+          -Dir release-out
+          -Repo $env:REPO
+          -InstallerSha256 $env:EXPECTED
+          -RequireSigning
 
       - name: Verify checksums
         working-directory: release-out/assets

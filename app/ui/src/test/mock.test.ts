@@ -141,6 +141,20 @@ describe("MockBackend", () => {
     expect((await b.undoLog()).length).toBe(2);
   });
 
+  it("clear history deletes snapshots, the undo log and keep decisions", async () => {
+    const b = mk();
+    const s = await b.suggestions();
+    await b.applyCleanup({ decisions: [{ suggestionId: s[0].id, decision: "remove" }, { suggestionId: s[1].id, decision: "keep" }], destination: { kind: "trash" } });
+    expect((await b.undoLog()).length).toBeGreaterThan(0);
+    expect((await b.getSettings()).keptItems.length).toBe(1);
+    await b.clearHistory();
+    expect(await b.undoLog()).toEqual([]);
+    expect(await b.listSnapshots("")).toEqual([]);
+    expect((await b.getSettings()).keptItems).toEqual([]);
+    // The current scan stays: its suggestions are still there, and the kept item comes back.
+    expect((await b.suggestions()).some((x) => x.id === s[1].id)).toBe(true);
+  });
+
   it("offers no duplicates when duplicate detection is off", async () => {
     const b = mk();
     expect((await b.suggestions()).some((s) => s.group === "duplicates")).toBe(true);

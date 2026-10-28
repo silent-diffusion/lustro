@@ -41,15 +41,18 @@ the key is never available to an unprotected workflow run.
    written for users. The app shows this text when it offers the update.
 3. Update `app/src-tauri/RELEASE_NOTES.md` (the notes the app shows after updating) for x.y.z.
 4. Merge to `main` with CI green, then tag: `git tag vX.Y.Z && git push origin vX.Y.Z`.
-5. A required reviewer approves the `release` deployment in the workflow run.
-6. The workflow checks the tag matches the version and that the public key is set, then:
-   - builds `Lustro-Setup-x.y.z.exe` **without** the key (`tauri build --no-sign`), so no
-     dependency's build script or npm tool ever sees it;
-   - signs it in a separate step that runs only the pinned Tauri CLI
-     (`tauri signer sign --app-version x.y.z`), bound to the version;
-   - builds the portable zip, then `latest.json` from the `.sig`, and `SHA256SUMS.txt`;
-   - checks both app exes pin the freshly built fast-scan helper;
-   - creates a **draft** release.
+5. The workflow runs three jobs:
+   - **build** (no secrets): checks the tag matches the version and the public key is set, builds
+     `Lustro-Setup-x.y.z.exe` unsigned (`tauri build --no-sign`) and the portable zip, checks both
+     app exes pin the freshly built fast-scan helper, and records the installer's SHA-256;
+   - **sign** (environment `release`): waits for a **required reviewer to approve** the deployment
+     in the workflow run. Then, on a fresh runner holding only `sign-installer.ps1`, the Tauri CLI
+     (fetched and checked against the lockfile) and the unsigned installer, it checks the
+     installer's SHA-256, signs it (`tauri signer sign --app-version x.y.z`) and uploads only the
+     `.sig`;
+   - **release** (no secrets): checks the installer's SHA-256 again, writes `latest.json` from the
+     `.sig` and `SHA256SUMS.txt`, and creates a **draft** release.
+6. Approve the `release` deployment when the run asks for it (step 5).
 7. Review the draft: download the installer, check it installs and runs, compare the checksum.
    Then **Publish**. From that moment `releases/latest/download/latest.json` points at it and
    installed copies update within a day.

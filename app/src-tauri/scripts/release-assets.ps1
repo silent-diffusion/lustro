@@ -1,29 +1,25 @@
-# Collects the release assets after build-installer.ps1 (used by .github/workflows/release.yml).
+# Builds the release assets that need the source tree, after build-installer.ps1. Runs in the
+# release workflow's `build` job, which has no access to the signing key.
 #
 # Writes to -OutDir:
-#   assets/Lustro-Setup-<v>.exe            the one-click installer
-#   assets/Lustro-Setup-<v>.exe.sig        its updater signature (sign-installer.ps1)
-#   assets/Lustro-<v>-portable-windows-x64.zip   lustro.exe (built with the `portable` feature: no
-#                                          updater, no network) + the fast-scan helper + licenses
-#   assets/latest.json                     the updater manifest the app checks
-#   assets/SHA256SUMS.txt                  SHA-256 of every asset above
+#   assets/Lustro-Setup-<v>.exe            the one-click installer (unsigned; the `sign` job signs it)
+#   assets/Lustro-<v>-portable-windows-x64.zip   lustro.exe (built without the updater: no network)
+#                                          + the fast-scan helper + licenses
+#   update-notes.md                        the CHANGELOG.md section for <v> (goes into latest.json,
+#                                          which the app shows when it offers the update)
 #   release-notes.md                       body of the GitHub Release
 #
-# The release notes (in latest.json, which the app shows, and on the release page) are the
-# CHANGELOG.md section for <v>. Without a .sig (local test builds) latest.json is skipped, unless
-# -RequireSigning, which makes that an error.
+# release-manifest.ps1 then adds latest.json and SHA256SUMS.txt once the .sig exists.
 #
 # Usage:  powershell -File app/src-tauri/scripts/release-assets.ps1 -Version 0.1.0 -OutDir release-out
 param(
     [Parameter(Mandatory)][string]$Version,
-    [Parameter(Mandatory)][string]$OutDir,
-    [string]$Repo = "silent-diffusion/lustro",
-    [switch]$RequireSigning
+    [Parameter(Mandatory)][string]$OutDir
 )
 $ErrorActionPreference = "Stop"
 $here = Split-Path -Parent $PSScriptRoot           # app/src-tauri
 $root = Resolve-Path (Join-Path $here "..\..")     # workspace root
-$utf8 = New-Object System.Text.UTF8Encoding $false # no BOM: the updater parses latest.json strictly
+$utf8 = New-Object System.Text.UTF8Encoding $false
 
 if ($Version -notmatch '^\d+\.\d+\.\d+$') { throw "version '$Version' is not x.y.z" }
 
@@ -54,14 +50,6 @@ $nsis = Join-Path $root "target\release\bundle\nsis"
 $setup = Join-Path $nsis $setupName
 if (-not (Test-Path $setup)) { throw "$setupName not found; run build-installer.ps1 first" }
 Copy-Item $setup $assets
-
-$sigPath = "$setup.sig"
-$hasSig = Test-Path $sigPath
-if ($hasSig) {
-    Copy-Item $sigPath $assets
-} elseif ($RequireSigning) {
-    throw "$setupName.sig not found; the build needs TAURI_SIGNING_PRIVATE_KEY"
-}
 
 # Portable zip: a separate build with the `portable` feature, which compiles out the updater, so
 # the portable app makes no network requests and never turns itself into an installed copy. Its
@@ -98,29 +86,7 @@ $zipName = "Lustro-$Version-portable-windows-x64.zip"
 Compress-Archive -Path (Join-Path $stage "*") -DestinationPath (Join-Path $assets $zipName)
 Remove-Item $stage -Recurse -Force
 
-# --- latest.json (Tauri updater manifest)
-if ($hasSig) {
-    $manifest = [ordered]@{
-        version   = $Version
-        notes     = $notes
-        pub_date  = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
-        platforms = [ordered]@{
-            "windows-x86_64" = [ordered]@{
-                signature = (Get-Content $sigPath -Raw).Trim()
-                url       = "https://github.com/$Repo/releases/download/v$Version/$setupName"
-            }
-        }
-    }
-    [System.IO.File]::WriteAllText((Join-Path $assets "latest.json"), ($manifest | ConvertTo-Json -Depth 5), $utf8)
-} else {
-    Write-Warning "No updater signature: latest.json not written (local test build)."
-}
-
-# --- Checksums
-$sums = Get-ChildItem $assets -File | Sort-Object Name | ForEach-Object {
-    "{0}  {1}" -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant(), $_.Name
-}
-[System.IO.File]::WriteAllText((Join-Path $assets "SHA256SUMS.txt"), (($sums -join "`n") + "`n"), $utf8)
+[System.IO.File]::WriteAllText((Join-Path $OutDir "update-notes.md"), $notes + "`n", $utf8)
 
 # --- GitHub Release body
 $body = @"

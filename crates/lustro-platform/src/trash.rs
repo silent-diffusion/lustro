@@ -4,7 +4,7 @@
 //! `lustro-core`'s cleanup module calls this through a trait it owns; [`PlatformTrash`] has the
 //! same three methods so the `impl` is a thin wrapper.
 
-use std::path::{Component, Path};
+use std::path::{Component, Path, PathBuf};
 
 use lustro_cloud::{Classifier, SyncRootKind};
 use lustro_core::dto::ItemIdentity;
@@ -117,10 +117,7 @@ impl PlatformTrash {
     /// permanently: where there's no usable trash it fails with
     /// [`TrashError::NoRecycleBin`].
     pub fn move_to_trash(&self, path: &Path) -> Result<(), TrashError> {
-        self.precheck(path)?;
-        // symlink_metadata: a link is trashed as a link, never followed.
-        std::fs::symlink_metadata(path).map_err(io_err)?;
-        os::trash(path, &self.protected, None)
+        self.trash_final(path, None).map(drop)
     }
 
     /// Like [`move_to_trash`](Self::move_to_trash), but only if the item is still
@@ -133,9 +130,21 @@ impl PlatformTrash {
         path: &Path,
         expected: &ItemIdentity,
     ) -> Result<(), TrashError> {
+        self.trash_final(path, Some(expected)).map(drop)
+    }
+
+    /// Trashes and returns the path the item was actually trashed from: on Windows the
+    /// long final path (no 8.3 names, no `\\?\`), which is what the Recycle Bin records,
+    /// so undo can find the item again.
+    pub(crate) fn trash_final(
+        &self,
+        path: &Path,
+        expected: Option<&ItemIdentity>,
+    ) -> Result<PathBuf, TrashError> {
         self.precheck(path)?;
+        // symlink_metadata: a link is trashed as a link, never followed.
         std::fs::symlink_metadata(path).map_err(io_err)?;
-        os::trash(path, &self.protected, Some(expected))
+        os::trash(path, &self.protected, expected)
     }
 
     /// Returns a downloaded cloud file (or folder, recursively) to cloud-only. Only for
@@ -220,7 +229,7 @@ mod os {
         path: &Path,
         protected: &ProtectedPaths,
         expected: Option<&ItemIdentity>,
-    ) -> Result<(), TrashError> {
+    ) -> Result<PathBuf, TrashError> {
         let item = crate::recycle::open_item(path)?;
         if let Some(want) = expected {
             let now = item.identity().map_err(io_err)?;
@@ -231,8 +240,9 @@ mod os {
         checked_final(&item.path, protected)?;
         crate::recycle::check_volume(&item)?;
         let result = crate::recycle::recycle(&item.path);
+        let full = item.path.clone();
         drop(item);
-        result
+        result.map(|()| full)
     }
 
     /// The checks on the final path, for [`PlatformTrash::protected_reason`] too.
@@ -354,13 +364,14 @@ mod os {
         path: &Path,
         _protected: &ProtectedPaths,
         expected: Option<&ItemIdentity>,
-    ) -> Result<(), TrashError> {
+    ) -> Result<PathBuf, TrashError> {
         still_expected(path, expected)?;
         use trash::macos::{DeleteMethod, TrashContextExtMacos};
         let mut ctx = trash::TrashContext::default();
         ctx.set_delete_method(DeleteMethod::NsFileManager);
-        ctx.delete(resolved(path)?)
-            .map_err(|_| TrashError::TrashFailed)
+        let full = resolved(path)?;
+        ctx.delete(&full).map_err(|_| TrashError::TrashFailed)?;
+        Ok(full)
     }
 
     /// Linux and other Unix: only when the freedesktop trash for the item's mount is
@@ -371,7 +382,7 @@ mod os {
         path: &Path,
         _protected: &ProtectedPaths,
         expected: Option<&ItemIdentity>,
-    ) -> Result<(), TrashError> {
+    ) -> Result<PathBuf, TrashError> {
         still_expected(path, expected)?;
         let full = resolved(path)?;
         let mounts = lustro_cloud::system_mounts();
@@ -394,7 +405,8 @@ mod os {
         if !ok {
             return Err(TrashError::NoRecycleBin);
         }
-        trash::delete(&full).map_err(|_| TrashError::TrashFailed)
+        trash::delete(&full).map_err(|_| TrashError::TrashFailed)?;
+        Ok(full)
     }
 
     pub(super) fn free_up_space(
