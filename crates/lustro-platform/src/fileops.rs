@@ -1,10 +1,11 @@
 //! `lustro_core::cleanup::FileOps` for the real OS, plus the protected rules core plans with.
 
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use lustro_core::cleanup::{Action, FileOps, Outcome, ProtectScope, ProtectedRule, UndoItem};
 use lustro_core::dto::ItemIdentity;
+use lustro_core::model::FileId;
 
 use crate::protected::{ProtectedPaths, Scope};
 use crate::trash::{PlatformTrash, TrashError};
@@ -51,18 +52,20 @@ pub(crate) fn to_io(e: TrashError) -> io::Error {
     io::Error::new(kind, e.to_string())
 }
 
-/// Outcome of a trash. The token is `"<deletion time> <final path>"`: the time (Unix
-/// seconds) picks the right item when a path was trashed more than once, and the final
-/// path (long names on Windows) is what the trash records, so `restore` matches it even
-/// when the item was trashed through an 8.3 short path.
-fn trashed_now(full: &Path) -> Outcome {
+/// Outcome of a trash. The token is `"<deletion time>[:<volume>:<index>] <final path>"`:
+/// the time (Unix seconds) limits restore to items deleted around then, the final path
+/// (long names on Windows) is where the item was, and on Windows the file id identifies
+/// the item in the Recycle Bin, whose listed names are display names (no extension when
+/// Explorer hides known ones), so names there can't be matched.
+fn trashed_now((full, id): (PathBuf, Option<FileId>)) -> Outcome {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0);
+    let id = id.map_or(String::new(), |i| format!(":{}:{}", i.volume, i.index));
     Outcome {
         location: None,
-        token: Some(format!("{now} {}", full.to_string_lossy())),
+        token: Some(format!("{now}{id} {}", full.to_string_lossy())),
         undoable: CAN_RESTORE,
         freed_bytes: None,
     }
@@ -104,8 +107,7 @@ impl FileOps for PlatformTrash {
     /// Moves to the trash. The token is the deletion time (Unix seconds), used by `restore`
     /// to pick the right item when the same path was trashed more than once.
     fn trash(&self, path: &Path) -> io::Result<Outcome> {
-        let full = self.trash_final(path, None).map_err(to_io)?;
-        Ok(trashed_now(&full))
+        Ok(trashed_now(self.trash_final(path, None).map_err(to_io)?))
     }
 
     /// Trashes only if the item is still the one reviewed; a mismatch fails with "changed
@@ -113,8 +115,9 @@ impl FileOps for PlatformTrash {
     /// delete has run, but the shell re-opens by path, so a tiny rename window remains
     /// (see [`PlatformTrash::move_to_trash_checked`]); the Recycle Bin guard still applies.
     fn trash_checked(&self, path: &Path, expected: &ItemIdentity) -> io::Result<Outcome> {
-        let full = self.trash_final(path, Some(expected)).map_err(to_io)?;
-        Ok(trashed_now(&full))
+        Ok(trashed_now(
+            self.trash_final(path, Some(expected)).map_err(to_io)?,
+        ))
     }
 
     fn move_to(&self, _path: &Path, _target_dir: &Path) -> io::Result<Outcome> {
@@ -190,47 +193,14 @@ pub(crate) fn stat_identity(path: &Path) -> io::Result<Option<ItemIdentity>> {
     )
 ))]
 fn restore_from_trash(item: &UndoItem) -> io::Result<()> {
-    use lustro_cloud::paths;
-    use lustro_cloud::rules::Os;
-
-    let ci = Os::current().case_insensitive();
-    // Older tokens are just the time; newer ones also carry the final path.
-    let (time, trashed_from) = match item.token.as_deref() {
-        Some(t) => t
-            .split_once(' ')
-            .map_or((Some(t), None), |(a, b)| (Some(a), Some(b))),
-        None => (None, None),
-    };
-    let deleted_at: Option<i64> = time.and_then(|t| t.parse().ok());
-    // A newer token names exactly the path that was trashed; only that matches. For an
-    // older time-only token: the path as given, or with its folder made long and final
-    // (8.3 names expanded, links resolved, as the trash records it).
-    let want: Vec<String> = match trashed_from {
-        Some(p) => vec![p.to_owned()],
-        None => std::iter::once(item.original.clone())
-            .chain(long_form(&item.original))
-            .map(|p| p.to_string_lossy().into_owned())
-            .collect(),
-    };
-    let want: Vec<String> = want.iter().map(|w| paths::key(w, ci)).collect();
+    let want = Wanted::from(item);
     let items =
         trash::os_limited::list().map_err(|_| io::Error::other("couldn't read the trash"))?;
-    // Deleted within RESTORE_WINDOW_SECS of our deletion time (when known), so an older
-    // item the user trashed from the same path is never picked, and the same original
-    // path. The bin may record the folder in another form than the one we passed (GitHub's
-    // Windows runners record the 8.3 short name of the profile folder), so a recorded path
-    // also counts in its long, final form: the same folder, never a different one.
-    // If several remain, the one closest to our deletion time.
-    let same_path = |t: &trash::TrashItem| {
-        let recorded = t.original_path();
-        want.contains(&paths::key(&recorded.to_string_lossy(), ci))
-            || long_form(&recorded)
-                .is_some_and(|l| want.contains(&paths::key(&l.to_string_lossy(), ci)))
-    };
+    // If several match, the one closest to our deletion time.
+    let deleted_at = want.deleted_at;
     let found = items
         .into_iter()
-        .filter(|t| deleted_at.is_none_or(|d| (t.time_deleted - d).abs() <= RESTORE_WINDOW_SECS))
-        .filter(same_path)
+        .filter(|t| want.matches(t, bin_item_id))
         .min_by_key(|t| deleted_at.map_or(-t.time_deleted, |d| (t.time_deleted - d).abs()))
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "item is no longer in the trash"))?;
     trash::os_limited::restore_all([found]).map_err(|e| match e {
@@ -240,6 +210,144 @@ fn restore_from_trash(item: &UndoItem) -> io::Result<()> {
         ),
         _ => io::Error::other("couldn't restore the item"),
     })
+}
+
+/// What `restore` looks for in the trash, from an undo item and its token.
+#[cfg(any(
+    windows,
+    all(
+        unix,
+        not(target_os = "macos"),
+        not(target_os = "ios"),
+        not(target_os = "android")
+    )
+))]
+struct Wanted {
+    deleted_at: Option<i64>,
+    /// Case-folded where the OS is case-insensitive.
+    paths: Vec<String>,
+    file_id: Option<FileId>,
+    ci: bool,
+}
+
+#[cfg(any(
+    windows,
+    all(
+        unix,
+        not(target_os = "macos"),
+        not(target_os = "ios"),
+        not(target_os = "android")
+    )
+))]
+impl Wanted {
+    fn from(item: &UndoItem) -> Self {
+        use lustro_cloud::paths;
+        let ci = lustro_cloud::rules::Os::current().case_insensitive();
+        // Older tokens are just the time; newer ones also carry the final path, and on
+        // Windows the file id after the time.
+        let (head, trashed_from) = match item.token.as_deref() {
+            Some(t) => t
+                .split_once(' ')
+                .map_or((Some(t), None), |(a, b)| (Some(a), Some(b))),
+            None => (None, None),
+        };
+        let mut head = head.unwrap_or("").split(':');
+        let deleted_at = head.next().and_then(|t| t.parse().ok());
+        let file_id = match (head.next(), head.next()) {
+            (Some(v), Some(i)) => v
+                .parse()
+                .ok()
+                .zip(i.parse().ok())
+                .map(|(volume, index)| FileId { volume, index }),
+            _ => None,
+        };
+        // A newer token names exactly the path that was trashed; only that matches. For an
+        // older time-only token: the path as given, or with its folder made long and final.
+        let paths = match trashed_from {
+            Some(p) => vec![PathBuf::from(p)],
+            None => std::iter::once(item.original.clone())
+                .chain(long_form(&item.original))
+                .collect(),
+        };
+        let paths = paths
+            .iter()
+            .map(|p| paths::key(&p.to_string_lossy(), ci))
+            .collect();
+        Wanted {
+            deleted_at,
+            paths,
+            file_id,
+            ci,
+        }
+    }
+
+    /// Whether `t` is our item. All of:
+    /// - deleted within RESTORE_WINDOW_SECS of our deletion time (when known), so an older
+    ///   item the user trashed from the same place is never picked;
+    /// - from the same folder: as recorded, or in its long, final form (the same folder
+    ///   spelled differently, never a different one);
+    /// - with the same name. On Windows the bin lists display names, which drop the
+    ///   extension when Explorer hides known ones (the default), so the name also counts
+    ///   with the extension of the item in the bin (`$R….txt` keeps the real one);
+    /// - with a file id in the token (Windows): the item in the bin is that very file.
+    fn matches(
+        &self,
+        t: &trash::TrashItem,
+        id_of: impl Fn(&trash::TrashItem) -> Option<FileId>,
+    ) -> bool {
+        use lustro_cloud::paths;
+        if self
+            .deleted_at
+            .is_some_and(|d| (t.time_deleted - d).abs() > RESTORE_WINDOW_SECS)
+        {
+            return false;
+        }
+        let key = |p: &Path| paths::key(&p.to_string_lossy(), self.ci);
+        let folder = key(&t.original_parent);
+        let mut long_folder = None;
+        let mut names = vec![key(Path::new(&t.name))];
+        if cfg!(windows) {
+            if let Some(ext) = Path::new(&t.id).extension() {
+                let mut full = t.name.clone();
+                full.push(".");
+                full.push(ext);
+                names.push(key(Path::new(&full)));
+            }
+        }
+        let ours = self.paths.iter().any(|w| {
+            let w = Path::new(w);
+            let (Some(want_folder), Some(want_name)) = (w.parent().map(key), w.file_name()) else {
+                return false;
+            };
+            names.contains(&key(Path::new(want_name)))
+                && (want_folder == folder
+                    || long_folder
+                        .get_or_insert_with(|| {
+                            std::fs::canonicalize(&t.original_parent)
+                                .ok()
+                                .map(|l| key(&l))
+                        })
+                        .as_ref()
+                        == Some(&want_folder))
+        });
+        ours && self.file_id.is_none_or(|id| id_of(t) == Some(id))
+    }
+}
+
+/// The file id of an item in the Recycle Bin (`$R…`), from metadata only.
+#[cfg(windows)]
+fn bin_item_id(t: &trash::TrashItem) -> Option<FileId> {
+    crate::recycle::identity(Path::new(&t.id)).ok()??.file_id
+}
+
+#[cfg(all(
+    unix,
+    not(target_os = "macos"),
+    not(target_os = "ios"),
+    not(target_os = "android")
+))]
+fn bin_item_id(_t: &trash::TrashItem) -> Option<FileId> {
+    None
 }
 
 /// How far a trash entry's deletion time may be from ours and still count as our item.
@@ -510,7 +618,7 @@ mod tests {
                 out.token
                     .as_deref()
                     .and_then(|t| t.split_once(' '))
-                    .map(|(t, _)| t.to_owned())
+                    .map(|(head, _)| head.split(':').next().unwrap().to_owned())
             } else {
                 out.token
             };
@@ -535,49 +643,43 @@ mod tests {
         }
     }
 
-    /// Path-free summary of the bin against `item`: counts, time deltas, and which
-    /// comparison failed for the items with the same name.
+    /// Path-free summary of the bin against `item`: counts, and for the items deleted
+    /// within the window, which part of the match failed.
     #[cfg(any(windows, all(unix, not(target_os = "macos"))))]
     fn bin_report(item: &UndoItem) -> String {
-        use lustro_cloud::paths;
-        let ci = Os::current().case_insensitive();
         let Ok(items) = trash::os_limited::list() else {
             return "the bin can't be listed".into();
         };
-        let token = item.token.as_deref().unwrap_or("");
-        let (time, recorded) = token.split_once(' ').unwrap_or((token, ""));
-        let at: Option<i64> = time.parse().ok();
-        let want = paths::key(recorded, ci);
+        let want = Wanted::from(item);
         let name = item
             .original
             .file_name()
             .map(|n| n.to_string_lossy().to_lowercase());
-        let mut out = format!(
-            "bin items: {}; token has path: {}; ",
-            items.len(),
-            !recorded.is_empty()
-        );
-        let same_name: Vec<_> = items
+        let near: Vec<_> = items
             .iter()
-            .filter(|t| Some(t.name.to_string_lossy().to_lowercase()) == name)
+            .filter(|t| {
+                want.deleted_at
+                    .is_none_or(|d| (t.time_deleted - d).abs() <= RESTORE_WINDOW_SECS)
+            })
             .collect();
-        out += &format!("same name: {}", same_name.len());
-        for t in same_name {
-            let rec = t.original_path();
-            let rec_s = rec.to_string_lossy();
-            let long = long_form(&rec);
+        let mut out = format!(
+            "bin items: {}; within the window: {}; token has id: {}",
+            items.len(),
+            near.len(),
+            want.file_id.is_some()
+        );
+        for t in near {
+            let ext = Path::new(&t.id)
+                .extension()
+                .map(|e| e.to_string_lossy().to_lowercase());
+            let shown = t.name.to_string_lossy().to_lowercase();
             out += &format!(
-                "\n  delta {:?} s; exact: {}; long form: {} (found {}); recorded has `~`: {}, \
-                 `\\\\?\\`: {}, drive letter: {}; ours has `~`: {}",
-                at.map(|a| t.time_deleted - a),
-                paths::key(&rec_s, ci) == want,
-                long.as_ref()
-                    .is_some_and(|l| paths::key(&l.to_string_lossy(), ci) == want),
-                long.is_some(),
-                rec_s.contains('~'),
-                rec_s.starts_with(r"\\?\"),
-                crate::recycle::is_drive_letter_path(&rec),
-                recorded.contains('~'),
+                "\n  delta {:?} s; name as listed: {}; with bin extension: {}; same id: {}; match: {}",
+                want.deleted_at.map(|d| t.time_deleted - d),
+                Some(&shown) == name.as_ref(),
+                ext.map(|e| format!("{shown}.{e}")).as_ref() == name.as_ref(),
+                want.file_id.is_some() && bin_item_id(t) == want.file_id,
+                want.matches(t, bin_item_id),
             );
         }
         out
@@ -614,9 +716,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let (f, item) = trashed_temp(&long(dir.path()), "lustro-window-test.txt");
         let token = item.token.clone().unwrap();
-        let (secs, path) = token.split_once(' ').unwrap();
+        let (head, path) = token.split_once(' ').unwrap();
+        let secs = head.split(':').next().unwrap();
+        let id = &head[secs.len()..];
         let old = secs.parse::<i64>().unwrap() - 10 * RESTORE_WINDOW_SECS;
-        for t in [format!("{old} {path}"), old.to_string()] {
+        for t in [format!("{old}{id} {path}"), old.to_string()] {
             let stale = UndoItem {
                 token: Some(t),
                 ..item.clone()
@@ -642,10 +746,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let (f, item) = trashed_temp(&long(dir.path()), "lustro-exact-test.txt");
         let token = item.token.clone().unwrap();
-        let (secs, _) = token.split_once(' ').unwrap();
+        let (head, _) = token.split_once(' ').unwrap();
         let elsewhere = long(dir.path()).join("some-other-name.txt");
         let wrong = UndoItem {
-            token: Some(format!("{secs} {}", elsewhere.display())),
+            token: Some(format!("{head} {}", elsewhere.display())),
             ..item.clone()
         };
         assert_eq!(
@@ -656,7 +760,7 @@ mod tests {
         if cfg!(windows) {
             // Case doesn't matter on Windows.
             let upper = UndoItem {
-                token: Some(format!("{secs} {}", f.to_string_lossy().to_uppercase())),
+                token: Some(format!("{head} {}", f.to_string_lossy().to_uppercase())),
                 original: elsewhere,
                 ..item.clone()
             };
@@ -665,6 +769,57 @@ mod tests {
             restore_or_explain(&ops(None), &item);
         }
         assert!(f.exists());
+    }
+
+    /// Regression (CI, windows-latest): the bin lists display names, so with Explorer
+    /// hiding known extensions (the Windows default) `x.txt` is listed as `x`. Matching
+    /// must not depend on that setting, and still needs folder, name and file id.
+    #[cfg(windows)]
+    #[test]
+    fn bin_items_match_whatever_explorer_shows() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = long(dir.path());
+        // Stand-ins for items inside the bin, which keep the real extension.
+        let in_bin = base.join("$RABC123.txt");
+        let other = base.join("$RXYZ789.txt");
+        std::fs::write(&in_bin, b"x").unwrap();
+        std::fs::write(&other, b"y").unwrap();
+        let id = stat_identity(&in_bin).unwrap().unwrap().file_id.unwrap();
+        let with_id = format!(":{}:{}", id.volume, id.index);
+        let folder = base.join("from");
+        let original = folder.join("x.txt");
+        let undo = |id: &str| UndoItem {
+            original: original.clone(),
+            location: None,
+            token: Some(format!("1000{id} {}", original.display())),
+            bytes: 1,
+            action: Action::Trash,
+            undoable: true,
+            restored: false,
+        };
+        let listed = |file: &Path, name: &str, at: i64| trash::TrashItem {
+            id: file.as_os_str().to_owned(),
+            name: name.into(),
+            original_parent: folder.clone(),
+            time_deleted: at,
+        };
+        for want in [Wanted::from(&undo(&with_id)), Wanted::from(&undo(""))] {
+            // Extension hidden or shown, any case: ours.
+            assert!(want.matches(&listed(&in_bin, "x", 1000), bin_item_id));
+            assert!(want.matches(&listed(&in_bin, "X.TXT", 1030), bin_item_id));
+            // Another name, or deleted well outside the window: not ours.
+            assert!(!want.matches(&listed(&in_bin, "y", 1000), bin_item_id));
+            assert!(!want.matches(&listed(&in_bin, "x.txt.txt", 1000), bin_item_id));
+            let late = 1000 + 10 * RESTORE_WINDOW_SECS;
+            assert!(!want.matches(&listed(&in_bin, "x", late), bin_item_id));
+            // Another folder: not ours.
+            let mut moved = listed(&in_bin, "x", 1000);
+            moved.original_parent = base.clone();
+            assert!(!want.matches(&moved, bin_item_id));
+        }
+        // With the file id: the same folder and name but another file is not ours.
+        let want = Wanted::from(&undo(&with_id));
+        assert!(!want.matches(&listed(&other, "x", 1000), bin_item_id));
     }
 
     /// The canonical form of a temp folder, without `\\?\`, as the trash records it.

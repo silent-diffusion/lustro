@@ -8,6 +8,7 @@ use std::path::{Component, Path, PathBuf};
 
 use lustro_cloud::{Classifier, SyncRootKind};
 use lustro_core::dto::ItemIdentity;
+use lustro_core::model::FileId;
 
 use crate::protected::ProtectedPaths;
 
@@ -133,14 +134,15 @@ impl PlatformTrash {
         self.trash_final(path, Some(expected)).map(drop)
     }
 
-    /// Trashes and returns the path the item was actually trashed from: on Windows the
-    /// long final path (no 8.3 names, no `\\?\`), which is what the Recycle Bin records,
-    /// so undo can find the item again.
+    /// Trashes and returns the path the item was actually trashed from (on Windows the
+    /// long final path: no 8.3 names, no `\\?\`) and, on Windows, its file id, which the
+    /// Recycle Bin keeps (the item is renamed into the bin on the same volume). Undo uses
+    /// both to find exactly this item again.
     pub(crate) fn trash_final(
         &self,
         path: &Path,
         expected: Option<&ItemIdentity>,
-    ) -> Result<PathBuf, TrashError> {
+    ) -> Result<(PathBuf, Option<FileId>), TrashError> {
         self.precheck(path)?;
         // symlink_metadata: a link is trashed as a link, never followed.
         std::fs::symlink_metadata(path).map_err(io_err)?;
@@ -229,20 +231,18 @@ mod os {
         path: &Path,
         protected: &ProtectedPaths,
         expected: Option<&ItemIdentity>,
-    ) -> Result<PathBuf, TrashError> {
+    ) -> Result<(PathBuf, Option<FileId>), TrashError> {
         let item = crate::recycle::open_item(path)?;
-        if let Some(want) = expected {
-            let now = item.identity().map_err(io_err)?;
-            if !want.still_matches(&now) {
-                return Err(TrashError::Changed);
-            }
+        let now = item.identity().map_err(io_err)?;
+        if expected.is_some_and(|want| !want.still_matches(&now)) {
+            return Err(TrashError::Changed);
         }
         checked_final(&item.path, protected)?;
         crate::recycle::check_volume(&item)?;
         let result = crate::recycle::recycle(&item.path);
         let full = item.path.clone();
         drop(item);
-        result.map(|()| full)
+        result.map(|()| (full, now.file_id))
     }
 
     /// The checks on the final path, for [`PlatformTrash::protected_reason`] too.
@@ -364,14 +364,14 @@ mod os {
         path: &Path,
         _protected: &ProtectedPaths,
         expected: Option<&ItemIdentity>,
-    ) -> Result<PathBuf, TrashError> {
+    ) -> Result<(PathBuf, Option<FileId>), TrashError> {
         still_expected(path, expected)?;
         use trash::macos::{DeleteMethod, TrashContextExtMacos};
         let mut ctx = trash::TrashContext::default();
         ctx.set_delete_method(DeleteMethod::NsFileManager);
         let full = resolved(path)?;
         ctx.delete(&full).map_err(|_| TrashError::TrashFailed)?;
-        Ok(full)
+        Ok((full, None))
     }
 
     /// Linux and other Unix: only when the freedesktop trash for the item's mount is
@@ -382,7 +382,7 @@ mod os {
         path: &Path,
         _protected: &ProtectedPaths,
         expected: Option<&ItemIdentity>,
-    ) -> Result<PathBuf, TrashError> {
+    ) -> Result<(PathBuf, Option<FileId>), TrashError> {
         still_expected(path, expected)?;
         let full = resolved(path)?;
         let mounts = lustro_cloud::system_mounts();
@@ -405,8 +405,10 @@ mod os {
         if !ok {
             return Err(TrashError::NoRecycleBin);
         }
+        // The freedesktop trash may copy across file systems, so no file id here; its
+        // .trashinfo records the real name, so the path alone finds the item.
         trash::delete(&full).map_err(|_| TrashError::TrashFailed)?;
-        Ok(full)
+        Ok((full, None))
     }
 
     pub(super) fn free_up_space(
