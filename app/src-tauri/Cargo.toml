@@ -37,7 +37,7 @@ serde.workspace = true
 serde_json.workspace = true
 tauri = { version = "2", features = [] }
 tauri-plugin-updater = { version = "2", optional = true }
-rfd = { version = "0.15", default-features = false, features = ["tokio"] }
+rfd = { version = "0.16", default-features = false, features = ["tokio"] }
 
 # On Linux and the BSDs rfd needs a dialog backend: the XDG desktop portal (pure Rust, over D-Bus).
 [target.'cfg(not(any(windows, target_os = "macos")))'.dependencies]
