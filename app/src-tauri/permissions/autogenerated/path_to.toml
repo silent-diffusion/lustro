@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-path-to"
+description = "Enables the path_to command without any pre-configured scope."
+commands.allow = ["path_to"]
+
+[[permission]]
+identifier = "deny-path-to"
+description = "Denies the path_to command without any pre-configured scope."
+commands.deny = ["path_to"]

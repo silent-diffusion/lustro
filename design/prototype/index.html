@@ -1,0 +1,223 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lustro · Overview</title>
+<link rel="stylesheet" href="../tokens.css?v=20">
+<link rel="stylesheet" href="app.css?v=20">
+<style>
+  .ov { grid-template-columns: minmax(320px, 400px) 1fr; align-items: start; }
+  .ov-left, .ov-right { display: grid; gap: var(--sp-4); min-width: 0; }
+  .terrain-card .terrain { height: 520px; }
+  .space-list .row { grid-template-columns: 14px 1fr auto; padding: 7px 6px; }
+  .space-list .row .exp { grid-column: 2 / 4; color: var(--text-3); font-size: var(--fs-xs); margin-top: -4px; }
+  .hist { display: flex; align-items: flex-end; gap: 10px; height: 110px; padding-top: 8px; }
+  .hist div { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 6px; height: 100%; justify-content: flex-end; }
+  .hist i { width: 100%; max-width: 18px; border-radius: 6px; background: color-mix(in srgb, var(--lime) 40%, transparent); }
+  .hist div:last-child i { background: var(--lime); }
+  .hist span { font-size: 10px; color: var(--text-3); }
+  .ins { grid-template-columns: repeat(4, 1fr); }
+  .cloud-list .row { grid-template-columns: 34px minmax(0, 1fr) auto; gap: 10px; padding: 8px 4px; align-items: start; }
+  .cloud-list .pv { font: 650 11px var(--font-mono); color: var(--cat-cloud); border: 1px solid var(--cat-cloud); border-radius: 8px; text-align: center; padding: 4px 0; }
+  .cloud-list .bar { height: 8px; margin-top: 6px; }
+  .cloud-list .bar .hatch, .sw2.hatch { background-image: repeating-linear-gradient(135deg, var(--cat-cloud) 0 1.5px, transparent 1.5px 5px); box-shadow: inset 0 0 0 1px var(--cat-cloud); }
+  .cloud-list .sub2 { font-size: var(--fs-xs); color: var(--text-3); }
+  .sw2 { width: 12px; height: 8px; border-radius: 3px; display: inline-block; }
+  .ins .tile { background: var(--surface-2); border-radius: var(--r-md); padding: var(--sp-4); display: grid; gap: 6px; }
+  .ins .tile .v { font-size: var(--fs-xl); font-weight: var(--fw-strong); }
+  .lower { grid-template-columns: 1fr 1fr; }
+  @media (max-width: 1100px) { .ov, .lower { grid-template-columns: 1fr; } .ins { grid-template-columns: 1fr 1fr; } }
+</style>
+</head>
+<body>
+<main class="page">
+  <div class="grid ov">
+    <div class="ov-left">
+      <section class="card">
+        <div class="card-head"><div class="ic" id="ic-space"></div><h2>Where did my space go?</h2></div>
+        <div class="stat-big" id="used"></div>
+        <div class="muted" style="margin:6px 0 14px" id="used-sub"></div>
+        <div class="bar" id="space-bar" style="height:18px"></div>
+        <div class="list space-list" id="space-list" style="margin-top:14px"></div>
+      </section>
+      <section class="card">
+        <div class="card-head"><div class="ic" id="ic-grew"></div><h2>Since last scan</h2><span class="sub" id="prev"></span>
+          <div class="tools"><a class="btn small" href="grew.html">What grew →</a></div></div>
+        <div style="display:flex;align-items:baseline;gap:10px"><div class="stat-big up" id="net"></div><span class="muted">net change</span></div>
+        <div class="hist" id="hist"></div>
+        <div class="list" id="growers" style="margin-top:12px"></div>
+      </section>
+      <section class="card">
+        <div class="card-head"><div class="ic" id="ic-cloud"></div><h2>Cloud storage</h2><span class="sub">all providers, same rules</span></div>
+        <div class="list cloud-list" id="cloud"></div>
+        <div class="legend" style="margin-top:10px">
+          <span><span class="sw2" style="background:var(--cat-cloud)"></span>On this device</span>
+          <span><span class="sw2 hatch"></span>Cloud only (not counted)</span>
+        </div>
+      </section>
+    </div>
+
+    <div class="ov-right">
+      <section class="card terrain-card">
+        <div class="card-head">
+          <div class="ic" id="ic-route"></div><h2 id="terrain-title">Terrain</h2><span class="sub accent">3D view</span>
+          <div class="tools">
+            <div class="seg" id="pinfilter"></div>
+            <button class="icon-btn" id="under" title="Look under: cloud-only lakes"></button>
+            <button class="icon-btn" id="flat" title="Top-down map"></button>
+            <a class="icon-btn" href="explore.html?view=terrain" title="Open in Explore" id="open"></a>
+          </div>
+        </div>
+        <div class="terrain" id="terrain"><div class="loading">Building terrain…</div></div>
+      </section>
+      <div class="grid lower">
+        <section class="card">
+          <div class="card-head"><div class="ic" id="ic-cat"></div><h2>By file type</h2><span class="sub">on disk</span></div>
+          <div class="list" id="cats"></div>
+        </section>
+        <section class="card">
+          <div class="card-head"><div class="ic" id="ic-ins"></div><h2>Insights</h2><span class="sub">nothing is deleted from here</span>
+            <div class="tools"><a class="btn small" href="cleanup.html">Review in Cleanup →</a></div></div>
+          <div class="grid ins" id="ins" style="grid-template-columns:1fr 1fr"></div>
+        </section>
+      </div>
+    </div>
+  </div>
+</main>
+
+<script src="data.js?v=20"></script>
+<script src="shell.js?v=20"></script>
+<script src="updates.js?v=20"></script>
+<script src="viz.js?v=20"></script>
+<script src="terrain.js?v=20"></script>
+<script>
+  Lustro.shell("overview");
+  const { root, drive, history } = Lustro.data;
+  const I = Lustro.icons, $ = (id) => document.getElementById(id);
+  $("ic-space").innerHTML = I.pie; $("ic-grew").innerHTML = I.grew; $("ic-route").innerHTML = I.route;
+  $("ic-cat").innerHTML = I.blocks; $("ic-ins").innerHTML = I.spark;
+  $("terrain-title").textContent = "Terrain of " + drive.title;
+  $("flat").innerHTML = I.map; $("under").innerHTML = I.lake; $("open").innerHTML = I.expand;
+
+  // ---- Where did my space go ----
+  const leaves = Lustro.leaves(root);
+  const byCat = {};
+  leaves.forEach((l) => (byCat[l.cat] = (byCat[l.cat] || 0) + l.onDisk));
+  const cloudGB = leaves.filter((l) => l.cloud).reduce((s, l) => s + l.size, 0);
+  const free = drive.capacity - drive.used;
+  $("used").innerHTML = `${drive.used.toFixed(0)}<small>GB used</small>`;
+  $("used-sub").innerHTML = `<span class="mono">${Lustro.fmt(free)}</span> free of ${Lustro.fmt(drive.capacity)} · every gigabyte accounted for below`;
+  function drawSpace() {
+    const segs = Object.keys(byCat).sort((a, b) => byCat[b] - byCat[a]).map((c) => ({ w: byCat[c], bg: Lustro.catColor(c), t: Lustro.CATS[c] }));
+    $("space-bar").innerHTML = segs.map((s) => `<span title="${s.t}" style="width:${(s.w / drive.capacity) * 100}%;background:${s.bg}"></span>`).join("") +
+      `<span class="unexplained" title="Unexplained" style="width:${(drive.unexplained / drive.capacity) * 100}%"></span>`;
+    // System space differs by OS: pagefile/hibernation/restore points on Windows; swap, snapshots and
+    // purgeable space on macOS; package caches, journal logs, Snap/Flatpak and Docker on Linux.
+    const sysItems = Lustro.all(root).filter((n) => n.sys).sort((a, b) => b.size - a.size);
+    const rows = [
+      ...sysItems.map((n) => ({ c: Lustro.catColor(n.cat), t: n.name, v: n.size, e: n.sys })),
+      ...Lustro.data.extraSys.map((x) => ({ c: Lustro.catColor("system"), t: x.t, v: x.v, e: x.e })),
+      { c: "transparent", ring: "var(--cat-cloud)", t: "Cloud-only files", v: cloudGB, e: "Cloud-only files (OneDrive, Google Drive, iCloud, Dropbox, Box…): listed in folders, 0 bytes on this disk. Not counted in used space." },
+      { c: "var(--text-3)", t: "Unexplained", v: drive.unexplained, e: Lustro.P.unexplained },
+    ];
+    const lead = { mac: "macOS groups most of these as “System Data” in its Storage settings.", linux: "On Linux the usual suspects are package caches, logs, Snap/Flatpak and Docker." }[Lustro.P.id];
+    $("space-list").innerHTML = (lead ? `<div class="faint" style="font-size:var(--fs-xs);padding:0 6px 6px">${lead}</div>` : "") + rows.map((r) => `
+      <div class="row"><span class="dot" style="background:${r.c};${r.ring ? `box-shadow:inset 0 0 0 1.5px ${r.ring}` : ""}"></span>
+      <span>${r.t}</span><span class="mono muted">${Lustro.fmt(r.v)}</span><span class="exp">${r.e}</span></div>`).join("");
+    $("cats").innerHTML = Object.keys(byCat).sort((a, b) => byCat[b] - byCat[a]).map((c) => `
+      <div class="row" style="grid-template-columns:10px 110px 1fr 70px">
+        <span class="dot" style="background:${Lustro.catColor(c)}"></span><span>${Lustro.CATS[c]}</span>
+        <div class="bar" style="height:6px"><span style="width:${(byCat[c] / Math.max(...Object.values(byCat))) * 100}%;background:${Lustro.catColor(c)}"></span></div>
+        <span class="mono muted" style="text-align:right">${Lustro.fmt(byCat[c])}</span></div>`).join("");
+  }
+  drawSpace();
+  document.addEventListener("lustro-theme", drawSpace);
+
+  // ---- Cloud storage: on-device vs cloud-only, per provider ----
+  $("ic-cloud").innerHTML = I.cloud;
+  const byProv = {};
+  leaves.filter((l) => l.provider).forEach((l) => {
+    const p = (byProv[l.provider] = byProv[l.provider] || { local: 0, pinned: 0, cloud: 0, where: "" });
+    if (l.cloud) p.cloud += l.size; else { p.local += l.size; if (l.state === "pinned") p.pinned += l.size; }
+    if (!p.where) { let f = l; while (f.parent && f.parent.provider) f = f.parent; p.where = f.path; }
+  });
+  const gd = Lustro.data.drives.find((d) => d.virtual);
+  if (gd && byProv.gdrive) byProv.gdrive.cloud = gd.cloudTotal - byProv.gdrive.local;
+  $("cloud").innerHTML = Object.entries(byProv).sort((a, b) => (b[1].local + b[1].cloud) - (a[1].local + a[1].cloud)).map(([k, p]) => {
+    const tot = p.local + p.cloud, pr = Lustro.PROVIDERS[k];
+    const where = k === "gdrive" && gd ? `${gd.short} virtual drive (Stream) · cache in <span class="mono">…\\AppData\\Local\\Google\\DriveFS</span>` : `<span class="mono">${p.where}</span>`;
+    if (!p.cloud) return `<div class="row"><span class="pv">${pr.short}</span>
+      <div style="min-width:0"><div>${pr.label}</div><div class="sub2">${where}</div>
+        <div class="sub2" style="margin-top:4px">Full local copies · ${Lustro.fmt(p.local)} on this device</div></div>
+      <span class="mono muted">${Lustro.fmt(p.local)}</span></div>`;
+    return `<div class="row"><span class="pv">${pr.short}</span>
+      <div style="min-width:0"><div>${pr.label}</div><div class="sub2">${where}</div>
+        <div class="bar"><span style="width:${(p.local / tot) * 100}%;background:var(--cat-cloud)"></span><span class="hatch" style="width:${(p.cloud / tot) * 100}%"></span></div>
+        <div class="sub2" style="margin-top:4px">${Lustro.fmt(p.local)} on this device${p.pinned ? ` (${Lustro.fmt(p.pinned)} always kept)` : ""} · ${Lustro.fmt(p.cloud)} cloud only</div></div>
+      <span class="mono muted">${Lustro.fmt(p.local)}</span></div>`;
+  }).join("") +
+  // Linux: cloud drives are usually network mounts. Listed, not scanned unless asked.
+  Lustro.data.remotes.map((r) => `<div class="row"><span class="pv">${Lustro.PROVIDERS[r.provider].short}</span>
+      <div style="min-width:0"><div>${Lustro.PROVIDERS[r.provider].label} <span class="badge">remote mount</span></div>
+        <div class="sub2"><span class="mono">${r.path}</span> · ${r.via}</div>
+        <div class="sub2" style="margin-top:4px">Not scanned: reading a network drive is slow and may download files.</div></div>
+      <button class="btn small">Scan anyway</button></div>`).join("");
+
+  // ---- Since last scan ----
+  $("prev").textContent = "vs " + Lustro.data.previousAt;
+  $("net").textContent = Lustro.fmt(root.d, { sign: true });
+  const lo = Math.min(...history.map((h) => h.used)) - 6, hi = drive.capacity * 0.9;
+  $("hist").innerHTML = history.map((h) => `<div><i style="height:${((h.used - lo) / (hi - lo)) * 100}%" title="${h.used.toFixed(1)} GB"></i><span>${h.date.slice(5).replace("-", "/")}</span></div>`).join("");
+  $("growers").innerHTML = leaves.filter((l) => l.d > 0).sort((a, b) => b.d - a.d).slice(0, 3).map((l) => `
+    <div class="row" style="grid-template-columns:1fr auto">
+      <div style="min-width:0"><div class="name">${l.name}</div><div class="path mono">${l.path}</div></div>
+      <span class="mono up">${Lustro.fmt(l.d, { sign: true })}</span></div>`).join("");
+
+  // ---- Insights ----
+  const dupGB = leaves.filter((l) => l.dup).reduce((s, l) => s + l.size, 0);
+  const staleGB = leaves.filter((l) => l.stale).reduce((s, l) => s + l.size, 0);
+  const devGB = ["cacache", "nodemod", "venv"].map((id) => Lustro.byId(id).size).reduce((a, b) => a + b, 0);
+  const tmpGB = Lustro.byId("tmp").size;
+  $("ins").innerHTML = [
+    ["Duplicates", dupGB, "2 sets, hash-verified", I.twins],
+    ["Old downloads", staleGB, "installers & archives > 6 mo", I.clock],
+    ["Dev caches", devGB, "rebuildable on demand", I.treeIc],
+    ["Temp files", tmpGB, "+2.3 GB since last scan", I.cleanup],
+  ].map(([t, v, s, ic]) => `<a class="tile" href="cleanup.html" style="color:inherit">
+      <span class="muted" style="display:flex;gap:6px;align-items:center"><span style="width:16px;height:16px;display:inline-flex">${ic}</span>${t}</span>
+      <span class="v mono">${Lustro.fmt(v)}</span><span class="faint" style="font-size:var(--fs-xs)">${s}</span></a>`).join("");
+</script>
+<script type="importmap">
+{ "imports": {
+  "three": "./vendor/three/three.module.js",
+  "three/addons/": "./vendor/three/addons/"
+} }
+</script>
+<script type="module">
+  import * as THREE from "three";
+  import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+  const t = Lustro.mountTerrain(document.getElementById("terrain"), THREE, OrbitControls, {
+    autoRotate: Lustro.P.id !== "linux", lowPower: Lustro.P.id === "linux",
+    onPick: (n) => (location.href = "explore.html?view=terrain&sel=" + encodeURIComponent(n.path)),
+  });
+  t.select(Lustro.byId("docker"));
+  let mode = Lustro.P.id === "linux" ? "top" : "3d";
+  document.getElementById("flat").classList.toggle("active", mode === "top");
+  const setMode = (m) => {
+    mode = mode === m ? "3d" : m; t.view(mode);
+    document.getElementById("flat").classList.toggle("active", mode === "top");
+    document.getElementById("under").classList.toggle("active", mode === "under");
+  };
+  document.getElementById("flat").onclick = () => setMode("top");
+  document.getElementById("under").onclick = () => setMode("under");
+  const kinds = { big: true, grew: true, dup: true, cloud: true };
+  const pf = document.getElementById("pinfilter");
+  [["big", "Largest", Lustro.icons.flag], ["grew", "Growers", Lustro.icons.arrowUp], ["dup", "Dupes", Lustro.icons.twins], ["cloud", "Cloud", Lustro.icons.cloud]].forEach(([k, l, ic]) => {
+    const b = document.createElement("button"); b.className = "on"; b.innerHTML = ic + l;
+    b.onclick = () => { kinds[k] = !kinds[k]; b.classList.toggle("on", kinds[k]); t.setPins(kinds); };
+    pf.appendChild(b);
+  });
+</script>
+</body>
+</html>

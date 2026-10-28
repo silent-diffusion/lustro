@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-root"
+description = "Enables the root command without any pre-configured scope."
+commands.allow = ["root"]
+
+[[permission]]
+identifier = "deny-root"
+description = "Denies the root command without any pre-configured scope."
+commands.deny = ["root"]

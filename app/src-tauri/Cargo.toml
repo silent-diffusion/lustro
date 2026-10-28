@@ -1,0 +1,51 @@
+[package]
+name = "lustro-app"
+description = "Lustro desktop app (Tauri 2 shell, IPC commands, scan sessions, updates)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+default-run = "lustro"
+
+[lib]
+name = "lustro_app"
+crate-type = ["rlib"]
+
+[[bin]]
+name = "lustro"
+path = "src/main.rs"
+
+[features]
+default = ["updater"]
+# The signed auto-updater (tauri-plugin-updater). On by default, for the installer build.
+updater = ["dep:tauri-plugin-updater"]
+# Portable zip: build with `--no-default-features --features portable`, so the updater plugin isn't
+# even linked: no auto-update, no network at all. `portable` also wins if both are on.
+portable = []
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+lustro-scan = { path = "../../crates/lustro-scan" }
+
+[dependencies]
+lustro-core.workspace = true
+lustro-scan = { path = "../../crates/lustro-scan" }
+lustro-cloud = { path = "../../crates/lustro-cloud" }
+lustro-platform = { path = "../../crates/lustro-platform" }
+serde.workspace = true
+serde_json.workspace = true
+tauri = { version = "2", features = [] }
+tauri-plugin-updater = { version = "2", optional = true }
+rfd = { version = "0.15", default-features = false, features = ["tokio"] }
+
+# On Linux and the BSDs rfd needs a dialog backend: the XDG desktop portal (pure Rust, over D-Bus).
+[target.'cfg(not(any(windows, target_os = "macos")))'.dependencies]
+rfd = { version = "0.15", default-features = false, features = ["tokio", "xdg-portal"] }
+
+[dev-dependencies]
+tempfile = "3"
+lustro-core = { workspace = true, features = ["fixtures"] }
+
+[lints]
+workspace = true

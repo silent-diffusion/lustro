@@ -1,0 +1,33 @@
+/* Dev-only demo page styles. Token values mirror design/tokens.css. */
+:root {
+  --bg: #0b0c0d; --surface-1: #17181a; --surface-2: #202124; --stroke: #2e3034; --stroke-strong: #45484d;
+  --text: #eceeef; --text-2: #a3a7ad; --text-3: #6d7177; --accent: #b9dbe6; --accent-ink: #0d1a1f;
+  --font-ui: "Manrope", "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", "Cascadia Mono", Consolas, monospace;
+  color-scheme: dark;
+}
+[data-theme="light"] {
+  --bg: #e9ecee; --surface-1: #ffffff; --surface-2: #f2f4f5; --stroke: #dde1e4; --stroke-strong: #c3c8cc;
+  --text: #15171a; --text-2: #565b62; --text-3: #8a8f96; --accent: #2f7d95; --accent-ink: #ffffff;
+  color-scheme: light;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 500 13px/1.4 var(--font-ui); }
+.bar { display: flex; align-items: center; gap: 12px; padding: 10px 16px; border-bottom: 1px solid var(--stroke); }
+.bar .hint { color: var(--text-3); font-size: 12px; }
+.spacer { flex: 1; }
+.stat { font-family: var(--font-mono); color: var(--text-2); font-variant-numeric: tabular-nums; }
+.layout { display: grid; grid-template-columns: 220px 1fr; gap: 16px; padding: 16px; height: calc(100% - 45px); }
+.panel { display: flex; flex-direction: column; gap: 10px; overflow: auto; }
+fieldset { border: 1px solid var(--stroke); border-radius: 16px; padding: 10px 12px 12px; margin: 0; display: flex; flex-direction: column; gap: 6px; }
+legend { color: var(--text-3); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; padding: 0 4px; }
+button { font: inherit; color: var(--text); background: var(--surface-2); border: 1px solid var(--stroke-strong); border-radius: 999px; padding: 5px 12px; cursor: pointer; text-align: left; }
+button[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+label { display: flex; gap: 6px; align-items: center; color: var(--text-2); }
+.readout { font-family: var(--font-mono); font-size: 11px; color: var(--text-2); white-space: pre-wrap; overflow-wrap: anywhere; }
+.card { position: relative; background: var(--surface-1); border: 1px solid var(--stroke); border-radius: 24px; overflow: hidden; min-height: 0; }
+.terrain-host { position: absolute; inset: 0; }
+.card.compact { max-width: 420px; max-height: 300px; }
+.perf-note { position: absolute; bottom: 12px; left: 50%; transform: translateX(-50%); z-index: 30000; display: flex; gap: 10px; align-items: center;
+  background: var(--surface-2); border: 1px solid var(--stroke-strong); border-radius: 999px; padding: 5px 6px 5px 14px; font-size: 11px; color: var(--text-2); white-space: nowrap; }
+.perf-note[hidden] { display: none; }

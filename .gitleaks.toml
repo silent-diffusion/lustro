@@ -1,0 +1,41 @@
+# gitleaks configuration: the default rules plus rules for minisign / Tauri updater private keys.
+# Used by CI (.github/workflows/ci.yml) and the pre-commit hook (.pre-commit-config.yaml).
+#   gitleaks git --config .gitleaks.toml        (history)
+#   gitleaks dir --config .gitleaks.toml .      (working tree)
+
+title = "Lustro gitleaks config"
+
+[extend]
+useDefault = true
+
+# The updater's private key, as minisign/rsign writes it to a file:
+#   untrusted comment: rsign encrypted secret key
+#   RWRTY0Iy...
+[[rules]]
+id = "minisign-secret-key-header"
+description = "minisign / Tauri updater private key file"
+regex = '''untrusted comment: (?:rsign|minisign) (?:encrypted )?secret key'''
+keywords = ["secret key"]
+
+# The key line itself: base64 of "Ed" + KDF ("Sc" = scrypt, encrypted; or none) + "B2" + ...
+[[rules]]
+id = "minisign-secret-key"
+description = "minisign / Tauri updater private key (raw key line)"
+regex = '''\b(?:RWRTY0Iy|RWQAAEIy)[A-Za-z0-9+/]{100,}={0,2}'''
+keywords = ["rwrty0iy", "rwqaaeiy"]
+
+# TAURI_SIGNING_PRIVATE_KEY: the whole key file, base64-encoded again. Public keys
+# ("minisign public key") encode differently and do not match.
+[[rules]]
+id = "tauri-signing-private-key"
+description = "Tauri updater private key (base64 of the key file, as in TAURI_SIGNING_PRIVATE_KEY)"
+regex = '''dW50cnVzdGVkIGNvbW1lbnQ6IH(?:JzaWdu|G1pbmlzaWdu)I(?:GVuY3J5cHRlZCBzZWNyZXQga2V5|HNlY3JldCBrZXk)'''
+keywords = ["dw50cnvzdgvkignvbw1lbnq6ih"]
+
+[allowlist]
+description = "Build output and installed dependencies"
+paths = [
+    '''(?:^|/)target/''',
+    '''(?:^|/)node_modules/''',
+    '''(?:^|/)dist/''',
+]

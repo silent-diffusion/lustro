@@ -1,0 +1,440 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lustro · Cleanup</title>
+<link rel="stylesheet" href="../tokens.css?v=20">
+<link rel="stylesheet" href="app.css?v=20">
+<style>
+  /* Queue bar */
+  .qbar { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: var(--sp-6); align-items: center; }
+  .qbar h2 { margin: 0; font-size: var(--fs-lg); }
+  .qsegs { display: flex; gap: 3px; height: 12px; }
+  .qsegs button { flex: var(--w); border: 0; padding: 0; border-radius: 4px; background: var(--stroke-strong); cursor: pointer; min-width: 6px; transition: background .2s; }
+  .qsegs button.remove { background: var(--coral); }
+  .qsegs button.keep { background: var(--lime); }
+  .qsegs button.free.remove { background: var(--cat-cloud); }
+  .treemap .cell.m-free::after, .icicle .bar-n.m-free::after {
+    content: ""; position: absolute; inset: 0; border-radius: inherit;
+    background: repeating-linear-gradient(135deg, var(--cat-cloud) 0 1.5px, transparent 1.5px 6px); box-shadow: inset 0 0 0 2px var(--cat-cloud);
+  }
+  .decide .fr { background: var(--cat-cloud); border-color: var(--cat-cloud); color: var(--accent-ink); }
+  .decide .fr kbd { color: rgba(0,0,0,.55); }
+  .pinwarn { border: 1px solid var(--amber); color: var(--amber); border-radius: var(--r-md); padding: 10px 12px; font-size: var(--fs-xs); margin: 8px 0 4px; }
+  .qsegs button.later { background: transparent; box-shadow: inset 0 0 0 1.5px var(--amber); }
+  .qsegs button.done { background: var(--text-3); }
+  .qsegs button.cur { outline: 2px solid var(--text); outline-offset: 2px; }
+  .qmeta { display: flex; justify-content: space-between; margin-top: 8px; font-size: var(--fs-xs); color: var(--text-3); }
+  .tally { display: flex; gap: var(--sp-4); align-items: center; }
+  .tally div { display: grid; text-align: right; }
+  .tally .k { font-size: 10px; text-transform: uppercase; letter-spacing: .06em; color: var(--text-3); }
+  .tally .v { font-family: var(--font-mono); font-weight: var(--fw-strong); }
+  .groups { display: flex; gap: 6px; flex-wrap: wrap; margin-top: var(--sp-4); }
+  .groups .chip { cursor: pointer; }
+
+  /* Main */
+  .cq { grid-template-columns: minmax(0, 1fr) 400px; margin-top: var(--sp-4); align-items: stretch; }
+  .map-card { display: flex; flex-direction: column; min-height: 600px; }
+  .map-body { flex: 1; position: relative; min-height: 420px; }
+  .crumbs { display: flex; gap: 4px; flex-wrap: wrap; font-size: var(--fs-xs); color: var(--text-3); margin: -6px 0 10px; font-family: var(--font-mono); }
+  .crumbs b { color: var(--text); font-weight: var(--fw-regular); }
+  .context-line { margin-top: 12px; font-size: var(--fs-sm); color: var(--text-2); display: flex; gap: 14px; flex-wrap: wrap; align-items: center; }
+  .context-line .legend { margin-left: auto; }
+  .sw { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+
+  /* Markers on the map */
+  .mark-pin { position: absolute; transform: translate(-50%, -100%); pointer-events: none; display: flex; flex-direction: column; align-items: center; z-index: 6; transition: left .35s var(--ease), top .35s var(--ease); }
+  .mark-pin .head { background: var(--accent); color: var(--accent-ink); border-radius: var(--r-pill); padding: 4px 10px; font-size: 11px; font-weight: var(--fw-strong); white-space: nowrap; box-shadow: var(--shadow); }
+  .mark-pin .stem { width: 2px; height: 16px; background: var(--accent); }
+  .mark-pin .dot2 { width: 9px; height: 9px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 0 var(--accent); animation: ping 1.6s infinite; }
+  @keyframes ping { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 70%, transparent); } 100% { box-shadow: 0 0 0 14px transparent; } }
+  .treemap .cell.cur, .icicle .bar-n.cur { outline: 2.5px solid var(--accent); outline-offset: -2px; z-index: 3; filter: none; opacity: 1 !important; }
+  .treemap .cell.ctx-dim, .icicle .bar-n.ctx-dim { opacity: .3; }
+  .treemap .cell.m-remove::after, .icicle .bar-n.m-remove::after {
+    content: ""; position: absolute; inset: 0; border-radius: inherit;
+    background: repeating-linear-gradient(135deg, rgba(0,0,0,.5) 0 2px, transparent 2px 6px); box-shadow: inset 0 0 0 2px var(--coral);
+  }
+  .treemap .cell.m-keep, .icicle .bar-n.m-keep { box-shadow: inset 0 0 0 2px var(--lime); }
+  .treemap .cell.queued:not(.cur):not(.m-remove):not(.m-keep), .icicle .bar-n.queued:not(.cur):not(.m-remove):not(.m-keep) { box-shadow: inset 0 0 0 1.5px var(--text); }
+
+  /* Decision card */
+  .dc { display: flex; flex-direction: column; }
+  .dc .pos { margin-left: auto; font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-3); }
+  .dc h3 { margin: 4px 0 2px; font-size: var(--fs-xl); word-break: break-word; line-height: 1.2; }
+  .dc .bigsize { font-family: var(--font-mono); font-size: var(--fs-hero); font-weight: var(--fw-strong); letter-spacing: -.03em; margin: 12px 0 0; line-height: 1; }
+  .why { background: var(--surface-2); border-radius: var(--r-md); padding: 12px 14px; margin: 14px 0 4px; font-size: var(--fs-sm); }
+  .why .k { font-size: 10px; text-transform: uppercase; letter-spacing: .06em; color: var(--text-3); display: block; margin-bottom: 2px; }
+  .kv { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; font-size: var(--fs-sm); margin: 12px 0; }
+  .kv span:nth-child(odd) { color: var(--text-3); }
+  .kv span:nth-child(even) { text-align: right; }
+  .twin { display: grid; gap: 6px; margin: 4px 0 8px; }
+  .twin div { display: grid; grid-template-columns: 70px minmax(0, 1fr); gap: 8px; font-size: var(--fs-xs); align-items: center; padding: 8px 10px; border-radius: var(--r-sm); border: 1px solid var(--stroke); }
+  .twin .lbl { font-weight: var(--fw-strong); text-transform: uppercase; letter-spacing: .05em; font-size: 10px; }
+  .decide { display: grid; grid-template-columns: 1.4fr 1fr 1fr; gap: 8px; margin-top: auto; padding-top: 14px; }
+  .decide button { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 12px 8px; border-radius: var(--r-md); border: 1.5px solid var(--stroke-strong); background: var(--surface-2); font-weight: var(--fw-strong); }
+  .decide button kbd { font: 500 10px var(--font-mono); color: var(--text-3); }
+  .decide .rm { background: var(--coral); border-color: var(--coral); color: #1a0d08; }
+  .decide .rm kbd { color: rgba(0,0,0,.55); }
+  .decide .kp { border-color: var(--lime); color: var(--lime); }
+  .decide .lt { border-style: dashed; color: var(--text-2); }
+  .decide button.chosen { outline: 2px solid var(--text); outline-offset: 2px; }
+  .decide-note { font-size: var(--fs-xs); color: var(--text-3); margin-top: 8px; text-align: center; }
+  .navrow { display: flex; justify-content: space-between; margin-top: 10px; }
+  .navrow button { border: 0; background: none; color: var(--text-2); font-size: var(--fs-xs); }
+  .next { margin-top: 14px; border-top: 1px solid var(--stroke); padding-top: 10px; }
+  .next .k { font-size: 10px; text-transform: uppercase; letter-spacing: .06em; color: var(--text-3); }
+  .next .row { grid-template-columns: 10px minmax(0, 1fr) auto; padding: 5px 4px; cursor: pointer; font-size: var(--fs-xs); }
+
+  /* Footer details */
+  details.more { margin-top: var(--sp-4); }
+  details.more summary { cursor: pointer; list-style: none; display: flex; gap: var(--sp-5); color: var(--text-2); font-size: var(--fs-sm); }
+  details.more summary::-webkit-details-marker { display: none; }
+  details.more .cols { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-6); margin-top: var(--sp-4); }
+  .lock .row { grid-template-columns: 18px minmax(0, 1fr) auto; }
+  .lock svg { width: 16px; height: 16px; color: var(--text-3); }
+  .hist .row { grid-template-columns: minmax(0, 1fr) auto auto; }
+
+  /* Modal */
+  .modal-bg { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: none; place-items: center; z-index: 60; }
+  .modal-bg.show { display: grid; }
+  .modal { width: min(560px, calc(100vw - 32px)); max-height: calc(100vh - 40px); overflow: auto; }
+  .dest { display: grid; gap: 8px; margin: 12px 0; }
+  .dest label { display: grid; grid-template-columns: 20px 1fr; gap: 8px; padding: 10px 12px; border: 1px solid var(--stroke); border-radius: var(--r-md); cursor: pointer; align-items: start; }
+  .dest label.on { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 7%, transparent); }
+  .dest input { accent-color: var(--accent); margin-top: 3px; }
+  .dest small { display: block; color: var(--text-3); }
+  .done { text-align: center; padding: 40px 20px; }
+
+  @media (max-width: 1150px) { .cq { grid-template-columns: 1fr; } .qbar { grid-template-columns: 1fr; } .tally { justify-content: space-between; } details.more .cols { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<main class="page">
+  <section class="card">
+    <div class="qbar">
+      <div><h2>Review queue</h2><div class="faint" id="qsub" style="font-size:var(--fs-xs)"></div></div>
+      <div><div class="qsegs" id="qsegs"></div><div class="qmeta"><span id="qprog"></span><span>Nothing changes until you apply</span></div></div>
+      <div class="tally">
+        <div><span class="k">Remove</span><span class="v up" id="t-rm"></span></div>
+        <div><span class="k">Keep</span><span class="v down" id="t-kp"></span></div>
+        <div><span class="k">Later</span><span class="v" id="t-lt" style="color:var(--amber)"></span></div>
+        <button class="btn primary" id="apply"></button>
+      </div>
+    </div>
+    <div class="groups" id="groups"></div>
+  </section>
+
+  <div class="grid cq">
+    <section class="card map-card">
+      <div class="card-head">
+        <div class="ic" id="ic-map"></div><h2>Where it lives</h2>
+        <div class="tools"><div class="seg" id="views"></div></div>
+      </div>
+      <div class="crumbs" id="crumbs"></div>
+      <div class="map-body" id="map"></div>
+      <div class="context-line">
+        <span id="ctx"></span>
+        <span class="legend">
+          <span><span class="sw" style="box-shadow:inset 0 0 0 2px var(--accent)"></span>This item</span>
+          <span><span class="sw" style="background:repeating-linear-gradient(135deg,var(--coral) 0 2px,transparent 2px 5px);box-shadow:inset 0 0 0 1.5px var(--coral)"></span>Remove</span>
+          <span><span class="sw" style="box-shadow:inset 0 0 0 2px var(--lime)"></span>Keep</span>
+          <span><span class="sw" style="box-shadow:inset 0 0 0 1.5px var(--text)"></span>In queue</span>
+        </span>
+      </div>
+    </section>
+
+    <section class="card dc" id="dc"></section>
+  </div>
+
+  <details class="card more">
+    <summary><span id="ic-more" style="display:inline-flex;width:16px"></span><span>5 protected paths are never offered</span><span class="faint">·</span><span>History: 2 past cleanups</span><span class="faint" style="margin-left:auto">Show ▾</span></summary>
+    <div class="cols">
+      <div class="lock"><div class="sec-t faint" style="font-size:var(--fs-xs);margin-bottom:6px">PROTECTED</div><div class="list" id="locked"></div></div>
+      <div class="hist"><div class="sec-t faint" style="font-size:var(--fs-xs);margin-bottom:6px">HISTORY</div>
+        <p class="faint" style="font-size:var(--fs-xs);margin:0 0 8px">Keeps your last 100 cleanups. Deleted items can be undone while they're still in the <span class="trash-word">Recycle Bin</span>, which you or the system can empty at any time.</p>
+        <div class="list">
+          <div class="row"><div style="min-width:0"><div class="name"><span class="trash-word">Recycle Bin</span> · 41 items</div><div class="path">Oct 21 · old installers</div></div><span class="mono down">−2.1 GB</span><button class="btn small">Undo</button></div>
+          <div class="row"><div style="min-width:0"><div class="name">Moved to <span class="other-drive">D:</span> · 1 folder</div><div class="path">Sep 30 · RAW 2022</div></div><span class="mono down">−18.4 GB</span><button class="btn small">Undo</button></div>
+        </div>
+      </div>
+    </div>
+  </details>
+</main>
+
+<div class="modal-bg" id="modal"><section class="card modal">
+  <div class="card-head"><div class="ic" id="ic-m"></div><h2>Apply your decisions</h2></div>
+  <p id="m-sum" style="margin-top:0"></p>
+  <div class="list" id="m-list" style="max-height:200px;overflow:auto"></div>
+  <div class="dest" id="dest">
+    <label class="on"><input type="radio" name="d" checked><span>Send to <span class="trash-word">Recycle Bin</span><small>Default · Items go to the <span class="trash-word">Recycle Bin</span>. You can undo from History while they're still there.</small></span></label>
+    <label><input type="radio" name="d"><span>Move to <span class="other-drive">D:</span><small>Frees this drive and keeps the files</small></span></label>
+    <label id="compress-opt"><input type="radio" name="d"><span>Compress in place<small>NTFS compression · slower to open</small></span></label>
+  </div>
+  <p class="muted" style="font-size:var(--fs-xs)" id="m-keep"></p>
+  <div style="display:flex;gap:8px;justify-content:flex-end">
+    <button class="btn" id="m-cancel">Back to queue</button>
+    <button class="btn primary" id="m-ok">Send to <span class="trash-word">Recycle Bin</span></button>
+  </div>
+</section></div>
+
+<script src="data.js?v=20"></script>
+<script src="shell.js?v=20"></script>
+<script src="viz.js?v=20"></script>
+<script src="terrain.js?v=20"></script>
+<script>
+  Lustro.shell("cleanup");
+  const I = Lustro.icons, $ = (id) => document.getElementById(id);
+  const { root } = Lustro.data;
+  const P = Lustro.P, other = Lustro.data.drives[1];
+  $("ic-map").innerHTML = I.map; $("ic-m").innerHTML = I.basket; $("ic-more").innerHTML = I.shield;
+
+  // ---- The queue: one suggestion per row, grouped by why it was suggested ----
+  const GROUPS = {
+    dup: { t: "Duplicates", ic: I.twins, safety: ["safe", "Hash-verified"] },
+    dev: { t: "Dev caches", ic: I.treeIc, safety: ["safe", "Rebuildable"] },
+    tmp: { t: "Temp files", ic: I.cleanup, safety: ["safe", P.tempLabel] },
+    old: { t: "Old downloads", ic: I.clock, safety: ["review", "Check first"] },
+    stale: { t: "Stale large files", ic: I.flag, safety: ["review", "Check first"] },
+    free: { t: "Free up space", ic: I.cloud, safety: ["safe", "Stays in the cloud"], optional: true },
+  };
+  const Q = [
+    { g: "dup", n: Lustro.byId("dupA"), why: "Byte-for-byte identical to another file. The original stays where it is.", foundBy: "SHA-256 match", opened: "Jun 2024", original: Lustro.byId("dupAorig") },
+    { g: "dup", n: Lustro.byId("dupB"), why: "Same content as edit-v3-final.mp4 in the same folder.", foundBy: "SHA-256 match", opened: "Jan 2025", original: Lustro.byId("dupBorig") },
+    { g: "dev", n: Lustro.byId("cacache"), why: "npm's download cache. It refills on its own the next time you install packages.", foundBy: "Known cache folder", opened: "2 days ago" },
+    { g: "dev", n: Lustro.byId("nodemod"), why: "Dependencies for the webshop project. Running npm install brings them back.", foundBy: "Project dependency folder", opened: "4 months ago" },
+    { g: "dev", n: Lustro.byId("venv"), why: "Python environment for ml-notebook. It can be recreated from requirements.txt.", foundBy: "Project dependency folder", opened: "7 months ago" },
+    { g: "tmp", n: Lustro.byId("tmp"), why: "Temporary files older than 7 days. Files that are open right now are skipped.", foundBy: P.tempLabel + " folder", opened: "—" },
+    { g: "tmp", n: Lustro.byId("bcache"), why: "Browser cache. Sites load a little slower the first time afterwards.", foundBy: "Known cache folder", opened: "today" },
+    { g: "old", n: Lustro.byId("inst14"), why: "Setup files for apps that are already installed.", foundBy: "Installer in Downloads, > 6 months", opened: "2024" },
+    { g: "old", n: Lustro.byId("inst1"), why: "Photo Suite is installed; this is its installer.", foundBy: "Installer in Downloads, > 6 months", opened: "Mar 2024" },
+    { g: "old", n: Lustro.byId("drv"), why: "An old driver package. Newer versions are already installed.", foundBy: "Archive in Downloads, > 6 months", opened: "Feb 2024" },
+    { g: "stale", n: Lustro.byId("oldbk"), why: "Large archive you haven't opened in over two years. Consider moving it to " + other.short + " instead.", foundBy: "Not opened in > 12 months", opened: "Feb 2024" },
+    { g: "stale", n: Lustro.byId("older"), why: "Screen recordings from 2023. Moving them to " + other.short + " keeps them and frees space here.", foundBy: "Not opened in > 12 months", opened: "Nov 2023" },
+    // Optional: return downloaded cloud files to cloud-only. The provider keeps the file; nothing is deleted.
+    { g: "free", n: Lustro.byId("freeOD"), why: "Downloaded from OneDrive. Freeing it makes it cloud-only again: it stays listed and re-downloads when you open it.", foundBy: "Downloaded cloud file", opened: "3 weeks ago" },
+    { g: "free", n: Lustro.byId("freeDB"), why: "Downloaded from Dropbox and not opened in months. The copy in Dropbox is untouched.", foundBy: "Downloaded cloud file", opened: "May 2026" },
+    { g: "free", n: Lustro.byId("freeGD"), why: "Google Drive's local copy of files you opened recently. Freeing it keeps them in Google Drive, still listed.", foundBy: "Google Drive cache", opened: "last week" },
+    { g: "free", n: Lustro.byId("pinOD"), why: "Downloaded from OneDrive and set to “Always keep on this device”.", foundBy: "Pinned cloud file", opened: "yesterday", pinned: true },
+  ];
+  for (let i = Q.length - 1; i >= 0; i--) if (!Q[i].n || (Q[i].g === "free" && !Q[i].n.state)) Q.splice(i, 1);
+  if (!Q.some((q) => q.g === "free")) delete GROUPS.free;
+  const decision = new Map(); // node -> "remove" | "keep" | "later" ("remove" on a Free up space item = return to cloud-only)
+  const isFree = (q) => q.g === "free";
+  let cur = 0, groupFilter = null;
+
+  const visible = () => Q.map((q, i) => i).filter((i) => !groupFilter || Q[i].g === groupFilter);
+
+  // ---- Queue bar ----
+  function renderBar() {
+    const total = Q.reduce((s, q) => s + q.n.size, 0);
+    $("qsub").textContent = `${Q.length} suggestions · ${Lustro.fmt(total)} could be freed`;
+    $("qsegs").innerHTML = Q.map((q, i) => `<button style="--w:${Math.max(1, q.n.size)}" class="${decision.get(q.n) || ""} ${isFree(q) ? "free" : ""} ${i === cur ? "cur" : ""}" data-i="${i}" title="${q.n.name} · ${Lustro.fmt(q.n.size)}"></button>`).join("");
+    const decided = Q.filter((q) => decision.has(q.n) && decision.get(q.n) !== "later").length;
+    $("qprog").textContent = `${decided} of ${Q.length} decided`;
+    const sum = (k) => Q.filter((q) => decision.get(q.n) === k);
+    const rm = sum("remove"), rmGB = rm.reduce((s, q) => s + q.n.size, 0);
+    const nFree = rm.filter(isFree).length;
+    $("t-rm").textContent = `${rm.length} · ${Lustro.fmt(rmGB)}`;
+    $("t-rm").title = nFree ? `${rm.length - nFree} to ${P.trash}, ${nFree} back to cloud-only` : "";
+    $("t-kp").textContent = sum("keep").length;
+    $("t-lt").textContent = sum("later").length;
+    $("apply").textContent = rm.length ? `Apply · free ${Lustro.fmt(rmGB)}` : "Apply";
+    $("apply").disabled = !rm.length; $("apply").style.opacity = rm.length ? 1 : 0.5;
+    $("groups").innerHTML = `<span class="chip ${!groupFilter ? "on" : ""}" data-g="">All ${Q.length}</span>` +
+      Object.entries(GROUPS).map(([k, g]) => {
+        const items = Q.filter((q) => q.g === k), left = items.filter((q) => !decision.has(q.n)).length;
+        return `<span class="chip ${groupFilter === k ? "on" : ""}" data-g="${k}"><span style="width:14px;height:14px;display:inline-flex">${g.ic}</span>${g.t}${g.optional ? ' <span class="faint">(optional)</span>' : ""} <span class="mono faint">${left ? left + " left" : "✓"}</span></span>`;
+      }).join("");
+  }
+  $("qsegs").onclick = (e) => { const b = e.target.closest("button"); if (b) go(+b.dataset.i); };
+  $("groups").onclick = (e) => {
+    const c = e.target.closest(".chip"); if (!c) return;
+    groupFilter = c.dataset.g || null;
+    const v = visible(); go(v.find((i) => !decision.has(Q[i].n)) ?? v[0]);
+  };
+
+  // ---- Decision card ----
+  function renderCard() {
+    const q = Q[cur], n = q.n, g = GROUPS[q.g], d = decision.get(n);
+    const parent = n.parent;
+    $("dc").innerHTML = `
+      <div class="card-head" style="margin-bottom:8px"><div class="ic">${g.ic}</div><h2>${g.t}</h2><span class="badge ${g.safety[0]}">${g.safety[1]}</span><span class="pos">${cur + 1} / ${Q.length}</span></div>
+      <h3>${n.name}</h3>${n.provider ? `<div style="margin:4px 0">${Lustro.cloudBadge(n)}</div>` : ""}
+      <div class="mono faint" style="font-size:var(--fs-xs);word-break:break-all">${parent.path}</div>
+      <div class="bigsize">${Lustro.fmt(n.size)}</div>
+      <div class="faint" style="font-size:var(--fs-xs);margin-top:4px">${((n.size / parent.size) * 100).toFixed(0)}% of ${parent.name} · ${((n.size / root.size) * 100).toFixed(1)}% of ${Lustro.data.drive.title}</div>
+      <div class="why"><span class="k">Why it's suggested</span>${q.why}</div>
+      ${q.pinned ? `<div class="pinwarn"><b>Pinned.</b> You chose to keep this on the device, probably for offline use. Freeing it unpins it, and it won't open without an internet connection.</div>` : ""}
+      ${q.original ? `<div class="twin">
+        <div style="border-color:var(--lime)"><span class="lbl down">Keeps</span><span class="mono" style="word-break:break-all">${q.original.path}</span></div>
+        <div style="border-color:var(--coral)"><span class="lbl up">Removes</span><span class="mono" style="word-break:break-all">${n.path}</span></div></div>` : ""}
+      <div class="kv">
+        <span>Last opened</span><span>${q.opened}</span>
+        <span>Type</span><span>${Lustro.CATS[n.cat]}</span>
+        <span>Found by</span><span>${q.foundBy}</span>
+      </div>
+      <div class="decide">
+        ${isFree(q) ? `<button class="fr ${d === "remove" ? "chosen" : ""}" data-d="remove">Free up space<kbd>R</kbd></button>`
+          : `<button class="rm ${d === "remove" ? "chosen" : ""}" data-d="remove">Remove<kbd>R</kbd></button>`}
+        <button class="kp ${d === "keep" ? "chosen" : ""}" data-d="keep">Keep<kbd>K</kbd></button>
+        <button class="lt ${d === "later" ? "chosen" : ""}" data-d="later">Later<kbd>L</kbd></button>
+      </div>
+      <div class="decide-note">${isFree(q) ? "The file stays in " + Lustro.PROVIDERS[n.provider].label + " and stays listed; only the local copy goes." : "Remove adds it to the list you apply at the end."} Keep stops suggesting it.</div>
+      <div class="navrow"><button data-nav="-1">← Previous</button><button data-nav="1">Next →</button></div>
+      <div class="next"><span class="k">Up next</span>${upNext()}</div>`;
+    $("dc").querySelectorAll("[data-d]").forEach((b) => (b.onclick = () => decide(b.dataset.d)));
+    $("dc").querySelectorAll("[data-nav]").forEach((b) => (b.onclick = () => step(+b.dataset.nav)));
+    $("dc").querySelectorAll("[data-i]").forEach((r) => (r.onclick = () => go(+r.dataset.i)));
+  }
+  function upNext() {
+    const v = visible(), pos = v.indexOf(cur);
+    const nxt = v.slice(pos + 1).concat(v.slice(0, pos)).filter((i) => !decision.has(Q[i].n)).slice(0, 4);
+    if (!nxt.length) return `<div class="faint" style="font-size:var(--fs-xs);padding:6px 4px">Nothing left in this view.</div>`;
+    return `<div class="list">${nxt.map((i) => `<div class="row" data-i="${i}"><span class="dot" style="background:${Lustro.catColor(Q[i].n.cat)}"></span><span class="name">${Q[i].n.name}</span><span class="mono muted">${Lustro.fmt(Q[i].n.size)}</span></div>`).join("")}</div>`;
+  }
+
+  function decide(d) {
+    const n = Q[cur].n;
+    decision.get(n) === d ? decision.delete(n) : decision.set(n, d);
+    const v = visible(), pos = v.indexOf(cur);
+    const nxt = v.slice(pos + 1).concat(v.slice(0, pos)).find((i) => !decision.has(Q[i].n));
+    render();
+    if (decision.has(n) && nxt !== undefined) setTimeout(() => go(nxt), 260);
+  }
+  function step(k) { const v = visible(), pos = v.indexOf(cur); go(v[(pos + k + v.length) % v.length]); }
+  function go(i) { if (i === undefined) return; cur = i; render(); }
+  addEventListener("keydown", (e) => {
+    if (e.target.closest("input, textarea") || $("modal").classList.contains("show")) return;
+    const k = e.key.toLowerCase();
+    if (k === "r") decide("remove"); else if (k === "k") decide("keep"); else if (k === "l") decide("later");
+    else if (k === "arrowright" || k === "j") step(1); else if (k === "arrowleft") step(-1);
+  });
+
+  // ---- Map: the user's chosen main view, with the current item pinned ----
+  const VIEWS = { blocks: ["Block map", I.blocks], ring: ["Ring chart", I.ring], icicle: ["File tree", I.treeIc], terrain: ["Terrain 3D", I.mountain] };
+  let view = Lustro.pref("view") || "blocks", viz = null, terrainApi = null;
+  $("views").innerHTML = Object.entries(VIEWS).map(([k, [l, ic]]) => `<button data-v="${k}">${ic}${l}</button>`).join("");
+  $("views").onclick = (e) => { const b = e.target.closest("button"); if (b) { view = b.dataset.v; buildMap(); } };
+  const queued = new Set(Q.map((q) => q.n));
+  const pickFromMap = (n) => { const i = Q.findIndex((q) => q.n === n); if (i >= 0) go(i); };
+
+  function buildMap() {
+    [...$("views").children].forEach((b) => b.classList.toggle("on", b.dataset.v === view));
+    if (terrainApi) { terrainApi.destroy(); terrainApi = null; }
+    const el = $("map");
+    el.innerHTML = ""; el.className = "map-body";
+    if (view === "blocks") viz = Lustro.treemap(el, { root, maxDepth: 8, onSelect: pickFromMap });
+    if (view === "ring") viz = Lustro.sunburst(el, { root, onSelect: pickFromMap });
+    if (view === "icicle") viz = Lustro.icicle(el, { root, onSelect: pickFromMap });
+    if (view === "terrain") {
+      el.innerHTML = `<div class="terrain" id="terrain" style="position:absolute;inset:0"><div class="loading">Building terrain…</div></div>`;
+      viz = null;
+      const mount = () => {
+        terrainApi = Lustro.mountTerrain($("terrain"), Lustro.three.THREE, Lustro.three.OrbitControls,
+          { pins: { big: false, grew: false, dup: false, cloud: false }, onPick: pickFromMap });
+        markMap();
+      };
+      Lustro.three ? mount() : document.addEventListener("lustro-three", mount, { once: true });
+    }
+    markMap();
+  }
+
+  function markMap() {
+    const n = Q[cur].n, el = $("map");
+    // Neighbourhood = the folder two levels up, so the item is seen in context.
+    let hood = n; for (let k = 0; k < 2 && hood.parent && hood.parent.parent; k++) hood = hood.parent;
+    const inHood = (x) => { for (let y = x; y; y = y.parent) if (y === hood) return true; return false; };
+    el.querySelectorAll(".mark-pin").forEach((p) => p.remove());
+    if (view === "terrain") { if (terrainApi) { terrainApi.select(n); terrainApi.focus(n, 1.6); } return; }
+    if (view === "ring") { viz.select(n); return; }
+    const cells = el.querySelectorAll(view === "blocks" ? ".cell" : ".bar-n");
+    let target = null;
+    cells.forEach((c) => {
+      const x = c._node, d = decision.get(x);
+      c.classList.toggle("cur", x === n);
+      c.classList.toggle("ctx-dim", !inHood(x));
+      c.classList.toggle("queued", queued.has(x));
+      const qi = Q.find((q) => q.n === x);
+      c.classList.toggle("m-remove", d === "remove" && !(qi && isFree(qi)));
+      c.classList.toggle("m-free", d === "remove" && !!qi && isFree(qi));
+      c.classList.toggle("m-keep", d === "keep");
+      c.classList.remove("dim", "sel");
+      if (x === n) target = c;
+    });
+    // Too small to draw on its own: point at the smallest drawn folder that contains it.
+    if (!target) cells.forEach((c) => { for (let y = n.parent; y; y = y.parent) if (c._node === y) { target = c; c.classList.add("cur"); } });
+    if (target) {
+      const pin = document.createElement("div");
+      pin.className = "mark-pin";
+      pin.innerHTML = `<div class="head">${n.name} · ${Lustro.fmt(n.size)}</div><div class="stem"></div><div class="dot2"></div>`;
+      el.appendChild(pin);
+      const r = target.getBoundingClientRect(), b = el.getBoundingClientRect();
+      const x = Math.min(Math.max(r.left - b.left + r.width / 2, 80), b.width - 80);
+      pin.style.left = x + "px";
+      pin.style.top = (r.top - b.top + Math.min(r.height / 2, 30)) + 4 + "px";
+    }
+  }
+
+  function render() {
+    renderBar(); renderCard(); markMap();
+    const n = Q[cur].n, chain = []; for (let x = n; x; x = x.parent) chain.unshift(x);
+    $("crumbs").innerHTML = chain.map((x, i) => i === chain.length - 1 ? `<b>${x.name}</b>` : `<span>${x.name}</span>`).join("<span>›</span>");
+    const p = n.parent;
+    $("ctx").innerHTML = `Inside <b>${p.name}</b> (${Lustro.fmt(p.size)}). Removing this frees <b class="up">${((n.size / p.size) * 100).toFixed(0)}%</b> of that folder.`;
+  }
+
+  // ---- Platform wording in the static parts ----
+  document.querySelectorAll(".trash-word").forEach((e) => (e.textContent = P.trash));
+  document.querySelectorAll(".other-drive").forEach((e) => (e.textContent = other.name));
+  if (P.id !== "win") $("compress-opt").remove(); // NTFS compression is Windows-only
+
+  // ---- Protected list ----
+  $("locked").innerHTML = [
+    ...P.protected,
+    ["Cloud-only files (all providers)", "Already 0 bytes on this disk, and never opened (that would download them)"],
+  ].map(([n, why]) => `<div class="row">${I.shield}<div style="min-width:0"><div class="name">${n}</div><div class="path">${why}</div></div><span class="badge locked">locked</span></div>`).join("");
+
+  // ---- Apply ----
+  $("apply").onclick = () => {
+    const rm = Q.filter((q) => decision.get(q.n) === "remove");
+    const del = rm.filter((q) => !isFree(q)), fr = rm.filter(isFree);
+    $("m-sum").innerHTML = `<b>${rm.length} items</b> · <span class="mono">${Lustro.fmt(rm.reduce((s, q) => s + q.n.size, 0))}</span> will be freed on ${Lustro.data.drive.title}`;
+    const rows = (list) => list.map((q) => `<div class="row" style="grid-template-columns:1fr auto"><span class="path mono" style="font-size:var(--fs-xs)">${q.n.path}</span><span class="mono muted">${Lustro.fmt(q.n.size)}</span></div>`).join("");
+    $("m-list").innerHTML = (del.length ? `<div class="faint" style="font-size:var(--fs-xs);margin:4px 0">REMOVE · ${del.length}</div>${rows(del)}` : "") +
+      (fr.length ? `<div class="faint" style="font-size:var(--fs-xs);margin:10px 0 4px">FREE UP SPACE · back to cloud-only · ${fr.length}</div>${rows(fr)}` : "");
+    $("dest").style.display = del.length ? "" : "none";
+    const kept = Q.filter((q) => decision.get(q.n) === "keep").length, later = Q.filter((q) => decision.get(q.n) === "later" || !decision.has(q.n)).length;
+    $("m-keep").textContent = `${kept} kept items won't be suggested again (manage in Settings). ${later} undecided items stay in the queue. System and app folders are always blocked.`;
+    $("modal").classList.add("show");
+  };
+  $("dest").onchange = () => {
+    [...$("dest").children].forEach((l) => l.classList.toggle("on", l.querySelector("input").checked));
+    const k = [...$("dest").querySelectorAll("input")].findIndex((i) => i.checked);
+    $("m-ok").textContent = ["Send to " + P.trash, "Move to " + other.short, "Compress"][k];
+  };
+  $("m-cancel").onclick = () => $("modal").classList.remove("show");
+  $("m-ok").onclick = () => {
+    $("modal").classList.remove("show");
+    Q.filter((q) => decision.get(q.n) === "remove").forEach((q) => decision.set(q.n, "done"));
+    render();
+  };
+
+  buildMap(); render();
+  addEventListener("resize", () => view !== "terrain" && buildMap());
+  document.addEventListener("lustro-theme", () => view !== "terrain" && buildMap());
+</script>
+<script type="importmap">
+{ "imports": {
+  "three": "./vendor/three/three.module.js",
+  "three/addons/": "./vendor/three/addons/"
+} }
+</script>
+<script type="module">
+  import * as THREE from "three";
+  import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+  Lustro.three = { THREE, OrbitControls };
+  document.dispatchEvent(new CustomEvent("lustro-three"));
+</script>
+</body>
+</html>

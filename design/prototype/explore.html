@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lustro · Explore</title>
+<link rel="stylesheet" href="../tokens.css?v=20">
+<link rel="stylesheet" href="app.css?v=20">
+<style>
+  .filters { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: var(--sp-4); }
+  .search { display: flex; align-items: center; gap: 8px; background: var(--surface-1); border: 1px solid var(--stroke); border-radius: var(--r-pill); padding: 7px 14px; min-width: 260px; color: var(--text-3); }
+  .search svg { width: 16px; height: 16px; }
+  .search input { background: none; border: 0; outline: 0; color: var(--text); font: inherit; flex: 1; }
+  .chip { cursor: pointer; }
+  .chip.off { opacity: .45; }
+  .ex { grid-template-columns: 300px minmax(0, 1fr) 300px; height: calc(100vh - 220px); min-height: 560px; }
+  .ex .card { display: flex; flex-direction: column; min-height: 0; }
+  .ex .body { flex: 1; min-height: 0; position: relative; }
+  .crumbs { display: flex; gap: 4px; flex-wrap: wrap; font-size: var(--fs-xs); color: var(--text-3); margin: -6px 0 10px; }
+  .crumbs a { color: var(--text-2); cursor: pointer; }
+  .det h3 { margin: 0 0 2px; font-size: var(--fs-lg); word-break: break-all; }
+  .kv { display: grid; grid-template-columns: 1fr auto; gap: 6px 10px; font-size: var(--fs-sm); margin: 14px 0; }
+  .kv span:nth-child(odd) { color: var(--text-2); }
+  .kv span:nth-child(even) { font-family: var(--font-mono); text-align: right; }
+  .actions { display: grid; gap: 8px; margin-top: auto; padding-top: 14px; }
+  .actions .btn { justify-content: center; }
+  .sec-t { font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: .06em; color: var(--text-3); margin: 14px 0 6px; }
+  .terrain-opts { position: absolute; top: 10px; left: 10px; z-index: 5; display: flex; gap: 6px; }
+  @media (max-width: 1200px) { .ex { grid-template-columns: 1fr; height: auto; } .ex .card { min-height: 420px; } }
+</style>
+</head>
+<body>
+<main class="page">
+  <div class="filters">
+    <label class="search"><span id="ic-search"></span><input placeholder="Search files and folders" id="q"><kbd class="faint mono" id="qk" style="font-size:10px"></kbd></label>
+    <div id="catchips" style="display:flex;gap:6px;flex-wrap:wrap"></div>
+    <span class="chip">Size ≥ 100 MB ▾</span>
+    <span class="chip">Modified: any time ▾</span>
+  </div>
+  <div class="grid ex">
+    <section class="card">
+      <div class="card-head"><div class="ic" id="ic-tree"></div><h2>Folders</h2><span class="sub">by size</span></div>
+      <div class="body scroll" id="tree"></div>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <div class="ic" id="ic-viz"></div><h2 id="viz-title">Block map</h2>
+        <div class="tools"><div class="seg" id="views"></div></div>
+      </div>
+      <div class="crumbs" id="crumbs"></div>
+      <div class="body" id="viz"></div>
+      <div id="legend" style="margin-top:12px"></div>
+    </section>
+
+    <section class="card det" id="details"></section>
+  </div>
+</main>
+
+<script src="data.js?v=20"></script>
+<script src="shell.js?v=20"></script>
+<script src="viz.js?v=20"></script>
+<script src="terrain.js?v=20"></script>
+<script>
+  Lustro.shell("explore");
+  const I = Lustro.icons, $ = (id) => document.getElementById(id);
+  const { root } = Lustro.data;
+  $("ic-search").innerHTML = I.search; $("ic-tree").innerHTML = I.treeIc;
+  $("ic-search").style.cssText = "display:inline-flex;width:16px";
+  $("qk").textContent = Lustro.kbd("F");
+
+  const VIEWS = { blocks: ["Block map", I.blocks], ring: ["Ring chart", I.ring], icicle: ["File tree", I.treeIc], terrain: ["Terrain 3D", I.mountain] };
+  const params = new URLSearchParams(location.search);
+  let view = params.get("view") || Lustro.pref("view") || "blocks";
+  let selected = params.get("sel") ? Lustro.find(params.get("sel")) : null;
+  let current = null;
+
+  // Category filter chips
+  const hiddenCats = new Set();
+  $("catchips").innerHTML = Object.keys(Lustro.CATS).slice(0, 8).map((c) =>
+    `<span class="chip on" data-c="${c}"><span class="dot" style="background:${Lustro.catColor(c)}"></span>${Lustro.CATS[c]}</span>`).join("");
+  $("catchips").onclick = (e) => {
+    const ch = e.target.closest(".chip"); if (!ch) return;
+    ch.classList.toggle("off");
+  };
+
+  // Folder tree
+  const tree = Lustro.folderTree($("tree"), { root, onSelect: (n) => select(n, "tree"), open: new Set([root, root.children[0], root.children[0].children[0]]) });
+
+  // View switcher
+  $("views").innerHTML = Object.entries(VIEWS).map(([k, [l, ic]]) => `<button data-v="${k}">${ic}${l}</button>`).join("");
+  $("views").onclick = (e) => { const b = e.target.closest("button"); if (b) setView(b.dataset.v); };
+
+  let terrainApi = null;
+  function setView(v) {
+    view = v; Lustro.pref("view-session", v);
+    [...$("views").children].forEach((b) => b.classList.toggle("on", b.dataset.v === v));
+    $("viz-title").textContent = VIEWS[v][0];
+    $("ic-viz").innerHTML = VIEWS[v][1];
+    const el = $("viz");
+    if (terrainApi) { terrainApi.destroy(); terrainApi = null; }
+    el.className = "body"; el.innerHTML = "";
+    if (v === "blocks") current = Lustro.treemap(el, { root, onSelect: (n) => select(n, "viz"), selected });
+    if (v === "ring") current = Lustro.sunburst(el, { root, onSelect: (n) => select(n, "viz") });
+    if (v === "icicle") current = Lustro.icicle(el, { root, onSelect: (n) => select(n, "viz") });
+    if (v === "terrain") {
+      el.innerHTML = `<div class="terrain-opts seg" id="tmodes">
+          <button data-m="3d" class="on">${I.mountain}3D</button><button data-m="top">${I.map}Top-down</button><button data-m="under">${I.lake}Look under</button></div>
+        <div class="terrain" id="terrain" style="height:100%"><div class="loading">Building terrain…</div></div>`;
+      $("tmodes").onclick = (e) => {
+        const b = e.target.closest("button"); if (!b || !terrainApi) return;
+        [...$("tmodes").children].forEach((x) => x.classList.toggle("on", x === b));
+        terrainApi.view(b.dataset.m);
+      };
+      current = { select: (n) => terrainApi && terrainApi.select(n) };
+      const mount = () => {
+        const low = Lustro.P.id === "linux";
+        const setOn = (m) => [...$("tmodes").children].forEach((x) => x.classList.toggle("on", x.dataset.m === m));
+        terrainApi = Lustro.mountTerrain($("terrain"), Lustro.three.THREE, Lustro.three.OrbitControls,
+          { onPick: (n) => select(n, "viz"), lowPower: low, onMode: setOn });
+        if (low) setOn("top");
+        if (selected) terrainApi.select(selected);
+      };
+      Lustro.three ? mount() : document.addEventListener("lustro-three", mount, { once: true });
+    }
+    if (selected && current) current.select(selected);
+    Lustro.legend($("legend"));
+  }
+
+  function select(n, from) {
+    selected = n;
+    if (from !== "tree") tree.select(n);
+    if (from !== "viz" || view !== "terrain") current && current.select(n);
+    if (view === "terrain" && from !== "viz") current.select(n);
+    renderDetails(n);
+    renderCrumbs(n);
+  }
+
+  function renderCrumbs(n) {
+    const chain = []; for (let x = n || root; x; x = x.parent) chain.unshift(x);
+    $("crumbs").innerHTML = chain.map((x, i) => `<a data-i="${i}">${x.name}</a>`).join("<span>›</span>");
+    $("crumbs").onclick = (e) => { const a = e.target.closest("a"); if (a) select(chain[+a.dataset.i], "crumb"); };
+  }
+
+  function renderDetails(n) {
+    n = n || root;
+    const cat = n.children ? Lustro.dominantCat(n) : n.cat;
+    const mix = {};
+    Lustro.leaves(n).forEach((l) => (mix[l.cat] = (mix[l.cat] || 0) + l.size));
+    const kids = (n.children || []).slice(0, 5);
+    const files = Lustro.leaves(n).length;
+    $("details").innerHTML = `
+      <div class="card-head"><div class="ic">${n.children ? I.folder : I.info}</div><h2>Details</h2>
+        ${n.dup ? '<span class="badge review">Duplicate</span>' : ""}</div>
+      ${n.provider ? `<div style="margin-bottom:8px">${Lustro.cloudBadge(n)}</div>` : ""}
+      <h3>${n.name}</h3>
+      <div class="mono faint" style="font-size:var(--fs-xs);word-break:break-all">${n.path}</div>
+      <div class="kv">
+        <span>Size</span><span>${Lustro.fmt(n.size)}</span>
+        <span>On this disk</span><span>${Lustro.fmt(n.onDisk)}</span>
+        ${n.children ? `<span>Items</span><span>${files * 37 + 12}</span>` : `<span>Type</span><span>${Lustro.CATS[cat]}</span>`}
+        <span>% of ${Lustro.data.drive.title}</span><span>${((n.size / root.size) * 100).toFixed(1)}%</span>
+        <span>Since last scan</span><span class="${n.d > 0 ? "up" : n.d < 0 ? "down" : ""}">${n.d ? Lustro.fmt(n.d, { sign: true }) : "no change"}</span>
+        <span>Modified</span><span>${n.d ? "2 days ago" : "Mar 14, 2025"}</span>
+      </div>
+      ${n.sys ? `<div class="muted" style="font-size:var(--fs-xs)">${n.sys}</div>` : ""}
+      ${n.provider && n.state ? `<div class="muted" style="font-size:var(--fs-xs)">${{
+        cloud: `Stored in ${Lustro.PROVIDERS[n.provider].label} only. It is listed here but uses no space on this disk, and Lustro never opens it (that would download it).`,
+        downloaded: `A ${Lustro.PROVIDERS[n.provider].label} file that has been downloaded. It uses space here like any local file, and you can free it back to cloud-only from Cleanup.`,
+        pinned: `Set to “Always keep on this device” in ${Lustro.PROVIDERS[n.provider].label}. It uses space here and stays available offline.`,
+      }[n.state]}</div>` : ""}
+      ${n.children ? `<div class="sec-t">Category mix</div>
+        <div class="bar" style="height:10px">${Object.keys(mix).sort((a, b) => mix[b] - mix[a]).map((c) =>
+          `<span style="width:${(mix[c] / n.size) * 100}%;background:${Lustro.catColor(c)}" title="${Lustro.CATS[c]}"></span>`).join("")}</div>
+        <div class="sec-t">Largest inside</div>
+        <div class="list">${kids.map((k) => `<div class="row" style="grid-template-columns:10px 1fr auto;padding:5px 4px;cursor:pointer" data-p="${k.path}">
+          <span class="dot" style="background:${Lustro.catColor(k.children ? Lustro.dominantCat(k) : k.cat)}"></span><span class="name">${k.name}</span><span class="mono muted">${Lustro.fmt(k.size)}</span></div>`).join("")}</div>` : ""}
+      <div class="actions">
+        <button class="btn">${I.folder}${Lustro.P.reveal}</button>
+        <button class="btn">${I.copy}Copy path</button>
+        <button class="btn" ${n.sys ? 'disabled title="Protected system file" style="opacity:.5"' : ""}>${I.basket}Add to cleanup basket</button>
+      </div>`;
+    $("details").querySelectorAll("[data-p]").forEach((r) => (r.onclick = () => select(Lustro.find(r.dataset.p), "details")));
+  }
+
+  setView(view);
+  if (selected) select(selected, "init"); else { renderDetails(root); renderCrumbs(root); }
+  addEventListener("resize", () => view !== "terrain" && setView(view));
+  document.addEventListener("lustro-theme", () => view !== "terrain" && setView(view));
+</script>
+<script type="importmap">
+{ "imports": {
+  "three": "./vendor/three/three.module.js",
+  "three/addons/": "./vendor/three/addons/"
+} }
+</script>
+<script type="module">
+  import * as THREE from "three";
+  import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+  Lustro.three = { THREE, OrbitControls };
+  document.dispatchEvent(new CustomEvent("lustro-three"));
+</script>
+</body>
+</html>

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-node"
+description = "Enables the node command without any pre-configured scope."
+commands.allow = ["node"]
+
+[[permission]]
+identifier = "deny-node"
+description = "Denies the node command without any pre-configured scope."
+commands.deny = ["node"]

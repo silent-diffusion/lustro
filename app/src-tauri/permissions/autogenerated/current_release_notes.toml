@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-current-release-notes"
+description = "Enables the current_release_notes command without any pre-configured scope."
+commands.allow = ["current_release_notes"]
+
+[[permission]]
+identifier = "deny-current-release-notes"
+description = "Denies the current_release_notes command without any pre-configured scope."
+commands.deny = ["current_release_notes"]

@@ -1,0 +1,123 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  checks:
+    name: Checks (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Tauri system packages (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config libwebkit2gtk-4.1-dev libgtk-3-dev \
+            libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev libdbus-1-dev
+
+      - name: Install Rust (stable)
+        shell: bash
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt,clippy
+          rustup default stable
+
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: app/ui/package-lock.json
+
+      - name: UI install, check and test
+        working-directory: app/ui
+        run: |
+          npm ci
+          npm run check
+          npm test
+
+      # The Tauri app embeds app/ui/dist at compile time, so build it before cargo.
+      - name: UI build
+        working-directory: app/ui
+        run: npm run build
+
+      - name: cargo fmt
+        run: cargo fmt --all --check
+
+      # --all-features includes lustro-app's `portable` feature, which compiles the updater out, so
+      # lint and test the default (installer) build as well.
+      - name: cargo clippy
+        run: |
+          cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+          cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      - name: cargo test
+        run: |
+          cargo test --workspace --all-features --locked
+          cargo test --workspace --locked
+
+  security:
+    name: Secrets and dependency audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # gitleaks scans the whole history
+          persist-credentials: false
+
+      - name: gitleaks (whole history, .gitleaks.toml)
+        env:
+          GITLEAKS_VERSION: 8.30.1
+          GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+        run: |
+          curl -sSfL -o gitleaks.tar.gz \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "${GITLEAKS_SHA256}  gitleaks.tar.gz" | sha256sum --check --strict
+          mkdir -p "$RUNNER_TEMP/gitleaks"
+          tar -xzf gitleaks.tar.gz -C "$RUNNER_TEMP/gitleaks" gitleaks
+          rm gitleaks.tar.gz
+          "$RUNNER_TEMP/gitleaks/gitleaks" git --config .gitleaks.toml --redact --verbose --no-banner .
+
+      - name: cargo deny (advisories, licenses, bans, sources)
+        env:
+          CARGO_DENY_VERSION: 0.20.2
+          CARGO_DENY_SHA256: 9f12ed4c49936e09b48bf862b595cde2fe64fcbd9d74dfacac6131ca824c8d5f
+        run: |
+          name="cargo-deny-${CARGO_DENY_VERSION}-x86_64-unknown-linux-musl"
+          curl -sSfL -o cargo-deny.tar.gz \
+            "https://github.com/EmbarkStudios/cargo-deny/releases/download/${CARGO_DENY_VERSION}/${name}.tar.gz"
+          echo "${CARGO_DENY_SHA256}  cargo-deny.tar.gz" | sha256sum --check --strict
+          tar -xzf cargo-deny.tar.gz -C "$RUNNER_TEMP"
+          rm cargo-deny.tar.gz
+          "$RUNNER_TEMP/${name}/cargo-deny" --locked check
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+
+      - name: npm audit
+        working-directory: app/ui
+        run: npm audit --audit-level=high

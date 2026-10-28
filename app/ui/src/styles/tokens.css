@@ -1,0 +1,117 @@
+/* Lustro design tokens (copied from design/tokens.css; keep in sync).
+   Dark is the default theme. Light overrides apply via [data-theme="light"]. */
+
+:root {
+  /* Surfaces */
+  --bg: #0b0c0d;            /* app window */
+  --surface-1: #17181a;     /* cards */
+  --surface-2: #202124;     /* card insets, inputs, nav pill */
+  --surface-3: #2a2c30;     /* hover, selected row */
+  --stroke: #2e3034;        /* card borders, dividers */
+  --stroke-strong: #45484d;
+
+  /* Text */
+  --text: #eceeef;
+  --text-2: #a3a7ad;        /* secondary labels */
+  --text-3: #6d7177;        /* axis labels, hints */
+
+  /* Accents (from the reference image) */
+  --accent: #b9dbe6;        /* pale blue: primary action, focus, selection */
+  --accent-ink: #0d1a1f;    /* text on accent */
+  --lime: #d6ec8c;
+  --coral: #ef7654;
+  --amber: #f3b05a;
+
+  /* Semantic */
+  --grew: var(--coral);
+  --shrank: var(--lime);
+  --danger: #ff6b5b;
+  --ok: var(--lime);
+  --warn: var(--amber);
+
+  /* File categories: same color in every view */
+  --cat-video: #ef7654;
+  --cat-images: #d6ec8c;
+  --cat-audio: #f3b05a;
+  --cat-docs: #a8cfde;
+  --cat-archives: #c4a5e8;
+  --cat-installers: #e88bb0;
+  --cat-dev: #7fd3b8;
+  --cat-apps: #8fa8f0;
+  --cat-system: #8a9097;
+  --cat-other: #5c6168;
+  --cat-cloud: #b9dbe6;     /* drawn as outline + hatch: no local bytes */
+
+  /* Terrain */
+  --terrain-fill: #141517;
+  --terrain-line: #c9ccd0;
+  --terrain-line-minor: #55595f;
+
+  /* Type */
+  --font-ui: "Manrope", "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", "Cascadia Mono", Consolas, monospace;
+  --fs-xs: 11px;
+  --fs-sm: 13px;
+  --fs-md: 15px;
+  --fs-lg: 18px;
+  --fs-xl: 24px;
+  --fs-hero: 40px;
+  --fw-regular: 500;
+  --fw-strong: 650;
+
+  /* Spacing (4px grid) */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 20px;
+  --sp-6: 24px;
+  --sp-8: 32px;
+
+  /* Shape */
+  --r-sm: 10px;
+  --r-md: 16px;
+  --r-lg: 24px;             /* cards */
+  --r-pill: 999px;
+  --shadow: 0 1px 0 rgba(255,255,255,.04) inset, 0 12px 32px rgba(0,0,0,.35);
+
+  --ease: cubic-bezier(.2,.7,.2,1);
+}
+
+[data-theme="light"] {
+  --bg: #e9ecee;
+  --surface-1: #ffffff;
+  --surface-2: #f2f4f5;
+  --surface-3: #e6e9eb;
+  --stroke: #dde1e4;
+  --stroke-strong: #c3c8cc;
+
+  --text: #15171a;
+  --text-2: #565b62;
+  --text-3: #8a8f96;
+
+  --accent: #2f7d95;
+  --accent-ink: #ffffff;
+  --lime: #6f9a12;
+  --coral: #d4512d;
+  --amber: #c27a10;
+  --danger: #c93a2c;
+
+  --cat-video: #d4512d;
+  --cat-images: #7fa61b;
+  --cat-audio: #c9861a;
+  --cat-docs: #3f8fae;
+  --cat-archives: #8a63c9;
+  --cat-installers: #c4527f;
+  --cat-dev: #2d9c7c;
+  --cat-apps: #4e6fd6;
+  --cat-system: #6b7178;
+  --cat-other: #a4a9af;
+  --cat-cloud: #3f8fae;
+
+  --terrain-fill: #f4f6f7;
+  --terrain-line: #3a3e43;
+  --terrain-line-minor: #b5babf;
+
+  --shadow: 0 1px 2px rgba(0,0,0,.05), 0 8px 24px rgba(20,30,40,.08);
+}

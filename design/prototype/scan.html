@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lustro · Live scan</title>
+<link rel="stylesheet" href="../tokens.css?v=20">
+<link rel="stylesheet" href="app.css?v=20">
+<style>
+  .scan { grid-template-columns: 420px minmax(0, 1fr); height: calc(100vh - 230px); min-height: 560px; }
+  .scan .card { display: flex; flex-direction: column; min-height: 0; }
+  .scan .body { flex: 1; min-height: 0; position: relative; }
+  .counters { display: grid; grid-template-columns: repeat(5, auto) 1fr; gap: var(--sp-8); align-items: end; }
+  .counters .k { font-size: var(--fs-xs); color: var(--text-3); text-transform: uppercase; letter-spacing: .06em; }
+  .counters .v { font-size: var(--fs-xl); font-weight: var(--fw-strong); font-family: var(--font-mono); }
+  .progress { height: 6px; border-radius: 3px; background: var(--surface-2); overflow: hidden; margin-top: 14px; }
+  .progress i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .3s var(--ease); }
+  .current { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-3); margin-top: 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tree .t-row { animation: grow-in .45s var(--ease) both; }
+  .tree .t-row.hot { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+  .tree .t-row.hot .t-name span:last-child { color: var(--accent); }
+  .tree .t-row.done .t-size { color: var(--text); }
+  @keyframes grow-in { from { opacity: 0; transform: translateX(-8px); } to { opacity: 1; transform: none; } }
+  .pulse { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 0 var(--accent); animation: pulse 1.4s infinite; }
+  @keyframes pulse { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 60%, transparent); } 100% { box-shadow: 0 0 0 10px transparent; } }
+  .mode { display: flex; gap: 10px; align-items: center; }
+  .done-banner { display: none; align-items: center; gap: 12px; }
+  .finished .done-banner { display: flex; }
+  .finished .pulse { animation: none; background: var(--lime); }
+  @media (max-width: 1100px) { .scan { grid-template-columns: 1fr; height: auto; } .scan .card { min-height: 420px; } .counters { grid-template-columns: repeat(3, 1fr); } }
+</style>
+</head>
+<body>
+<main class="page" id="page">
+  <section class="card" style="margin-bottom:var(--sp-4)">
+    <div class="card-head">
+      <div class="ic"><span class="pulse"></span></div>
+      <h2 id="status">Scanning</h2>
+      <span class="sub mode"><span class="badge" id="modebadge">Standard scan</span><span class="faint" id="modehint"></span></span>
+      <div class="tools">
+        <div class="done-banner"><span class="up" id="netdelta"></span><a class="btn" href="grew.html">See what grew</a></div>
+        <button class="btn" id="pause">Pause</button>
+        <a class="btn primary" href="explore.html" id="explore">Explore now</a>
+      </div>
+    </div>
+    <div class="counters">
+      <div><div class="k">Files</div><div class="v" id="c-files">0</div></div>
+      <div><div class="k">Folders</div><div class="v" id="c-folders">0</div></div>
+      <div><div class="k">Found</div><div class="v" id="c-bytes">0 GB</div></div>
+      <div><div class="k">Elapsed</div><div class="v" id="c-time">0:00</div></div>
+      <div><div class="k">Speed</div><div class="v" id="c-rate">–</div></div>
+    </div>
+    <div class="progress"><i id="bar"></i></div>
+    <div class="current" id="current"></div>
+  </section>
+
+  <div class="grid scan">
+    <section class="card">
+      <div class="card-head"><div class="ic" id="ic-tree"></div><h2>Folder tree</h2><span class="sub">building live</span></div>
+      <div class="body scroll" id="tree"></div>
+    </section>
+    <section class="card">
+      <div class="card-head"><div class="ic" id="ic-map"></div><h2>Block map</h2><span class="sub">fills in as folders are measured</span></div>
+      <div class="body" id="map"></div>
+      <div id="legend" style="margin-top:12px"></div>
+    </section>
+  </div>
+</main>
+
+<script src="data.js?v=20"></script>
+<script src="shell.js?v=20"></script>
+<script src="viz.js?v=20"></script>
+<script>
+  Lustro.shell("scan");
+  const I = Lustro.icons, $ = (id) => document.getElementById(id);
+  $("ic-tree").innerHTML = I.treeIc; $("ic-map").innerHTML = I.blocks;
+  Lustro.legend($("legend"));
+  const src = Lustro.data.root;
+  $("status").textContent = "Scanning " + src.path;
+  $("modehint").textContent = Lustro.P.standardScan + " " + Lustro.P.fastScan.split(".")[0] + ".";
+
+  // Discovery order: depth-first, the way a real scanner walks the disk.
+  const order = [];
+  (function walk(n) { order.push(n); (n.children || []).forEach(walk); })(src);
+  const leavesTotal = Lustro.leaves(src).length;
+
+  // Partial tree that grows as nodes are discovered.
+  const live = new Map();
+  function mirror(n) {
+    const m = { name: n.name, path: n.path, cat: n.cat, cloud: n.cloud, size: 0, onDisk: 0, d: 0, parent: n.parent ? live.get(n.parent) : null };
+    if (n.children) m.children = [];
+    if (m.parent) m.parent.children.push(m);
+    live.set(n, m);
+    return m;
+  }
+  const root = mirror(src);
+  const open = new Set([root]);
+  let i = 1, files = 0, folders = 0, found = 0, t0 = performance.now(), paused = false, hot = null;
+
+  function addSize(m, gb) { for (let x = m; x; x = x.parent) { x.size += gb; x.onDisk += m.cloud ? 0 : gb; } }
+  function sortAll(m) { if (m.children) { m.children.sort((a, b) => b.size - a.size); m.children.forEach(sortAll); } }
+
+  const tree = Lustro.folderTree($("tree"), { root, open });
+  let map = null;
+
+  function step() {
+    if (paused) return;
+    // Discover a few nodes per tick.
+    for (let k = 0; k < 2 && i < order.length; k++, i++) {
+      const n = order[i], m = mirror(n);
+      if (n.children) { folders += 1 + Math.round(n.size * 3); if (Lustro.depth(n) <= 3) open.add(m); }
+      else { files += Math.round(n.size * 410 + 30); found += n.size; addSize(m, n.size); }
+      hot = m;
+    }
+    sortAll(root);
+    tree.render();
+    // Highlight the branch being read.
+    const rows = $("tree").querySelectorAll(".t-row");
+    const hotChain = new Set(); for (let x = hot; x; x = x.parent) hotChain.add(x.path);
+    const flat = []; (function f(m) { (m.children || []).forEach((c) => { flat.push(c); if (c.children && open.has(c)) f(c); }); })(root);
+    rows.forEach((r, k) => { const m = flat[k]; if (!m) return; r.classList.toggle("hot", hotChain.has(m.path)); r.style.animation = r.dataset.seen ? "none" : ""; });
+    rows.forEach((r) => (r.dataset.seen = 1));
+
+    $("c-files").textContent = files.toLocaleString();
+    $("c-folders").textContent = folders.toLocaleString();
+    $("c-bytes").textContent = Lustro.fmt(found);
+    const s = (performance.now() - t0) / 1000;
+    $("c-time").textContent = `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
+    $("c-rate").textContent = Lustro.fmt(found / Math.max(s, 0.1)) + "/s";
+    $("bar").style.width = (i / order.length) * 100 + "%";
+    $("current").textContent = hot ? hot.path : "";
+    if (i >= order.length) finish();
+  }
+
+  function drawMap() { if (root.size > 0) map = Lustro.treemap($("map"), { root, maxDepth: 3 }); }
+
+  const tick = setInterval(step, 160);
+  const mapTick = setInterval(drawMap, 500);
+  function finish() {
+    clearInterval(tick); clearInterval(mapTick); drawMap();
+    $("page").classList.add("finished");
+    $("status").textContent = "Scan complete · " + src.path;
+    $("current").textContent = "Saved as snapshot · " + new Date().toLocaleString();
+    $("netdelta").textContent = Lustro.fmt(src.d, { sign: true }) + " since Oct 21";
+    $("pause").style.display = "none";
+    $("explore").textContent = "Open in Explore";
+    $("tree").querySelectorAll(".t-row").forEach((r) => r.classList.remove("hot"));
+  }
+  $("pause").onclick = () => { paused = !paused; $("pause").textContent = paused ? "Resume" : "Pause"; };
+  addEventListener("resize", drawMap);
+  document.addEventListener("lustro-theme", () => { tree.render(); drawMap(); });
+
+  Lustro.note("Each folder appears as it's found and its size counts up. The highlighted branch is the one being read right now. You can switch to Explore at any time; the scan keeps running in the background.");
+</script>
+</body>
+</html>

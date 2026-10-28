@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Terrain demo · Lustro (dev only)</title>
+  </head>
+  <body>
+    <header class="bar">
+      <strong>Terrain demo</strong>
+      <span class="hint">Dev only, fake data. Drag to rotate, scroll to zoom, click to select.</span>
+      <span class="spacer"></span>
+      <span class="stat" id="fps">– fps</span>
+    </header>
+    <div class="layout">
+      <aside class="panel">
+        <fieldset>
+          <legend>View</legend>
+          <button id="theme">Light theme</button>
+          <button id="flat" aria-pressed="false">2D flat map</button>
+          <button id="under" aria-pressed="false">Look under</button>
+          <button id="home">Fly home</button>
+        </fieldset>
+        <fieldset>
+          <legend>Options</legend>
+          <label><input type="checkbox" id="tint" checked /> Category tint</label>
+          <label><input type="checkbox" id="valleys" checked /> Cloud valleys</label>
+          <label><input type="checkbox" id="labels" checked /> Ring labels</label>
+          <label><input type="checkbox" id="pins" checked /> Pins</label>
+          <label><input type="checkbox" id="compact" /> Compact (hero card)</label>
+        </fieldset>
+        <fieldset>
+          <legend>Fly to</legend>
+          <button data-fly="largest">Largest file</button>
+          <button data-fly="grew">Top grower</button>
+          <button data-fly="cloud">Cloud valley</button>
+        </fieldset>
+        <fieldset>
+          <legend>Stress</legend>
+          <button id="big">Load 1M-node tree</button>
+          <button id="small">Load demo tree</button>
+          <button id="slow" aria-pressed="false">Simulate slow GPU</button>
+          <button id="remount">Dispose + remount</button>
+        </fieldset>
+        <div class="readout" id="readout"></div>
+      </aside>
+      <main class="card">
+        <div id="terrain" class="terrain-host"></div>
+        <div class="perf-note" id="perf" hidden>
+          <span>Switched to 2D for smoother performance</span>
+          <button id="try3d">Try 3D anyway</button>
+        </div>
+      </main>
+    </div>
+    <script type="module" src="./demo.ts"></script>
+  </body>
+</html>

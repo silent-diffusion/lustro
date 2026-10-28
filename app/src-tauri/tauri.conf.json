@@ -1,0 +1,109 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Lustro",
+  "mainBinaryName": "lustro",
+  "identifier": "io.github.silent-diffusion.lustro",
+  "build": {
+    "devUrl": "http://127.0.0.1:1420",
+    "frontendDist": "../ui/dist",
+    "beforeDevCommand": {
+      "script": "npm run dev -- --port 1420 --strictPort --host 127.0.0.1",
+      "cwd": "../ui"
+    },
+    "beforeBuildCommand": {
+      "script": "npm run build",
+      "cwd": "../ui"
+    }
+  },
+  "app": {
+    "withGlobalTauri": false,
+    "windows": [
+      {
+        "label": "main",
+        "title": "Lustro",
+        "width": 1440,
+        "height": 900,
+        "minWidth": 960,
+        "minHeight": 640,
+        "center": true,
+        "dragDropEnabled": false
+      }
+    ],
+    "security": {
+      "freezePrototype": true,
+      "csp": {
+        "default-src": "'self'",
+        "script-src": "'self'",
+        "style-src": "'self' 'unsafe-inline'",
+        "img-src": "'self' data: blob:",
+        "font-src": "'self'",
+        "worker-src": "'self' blob:",
+        "connect-src": "ipc: http://ipc.localhost",
+        "object-src": "'none'",
+        "base-uri": "'none'",
+        "form-action": "'none'",
+        "frame-src": "'none'",
+        "frame-ancestors": "'none'"
+      },
+      "devCsp": {
+        "default-src": "'self'",
+        "script-src": "'self'",
+        "style-src": "'self' 'unsafe-inline'",
+        "img-src": "'self' data: blob:",
+        "font-src": "'self'",
+        "worker-src": "'self' blob:",
+        "connect-src": "ipc: http://ipc.localhost ws://127.0.0.1:1420",
+        "object-src": "'none'",
+        "base-uri": "'none'",
+        "form-action": "'none'",
+        "frame-src": "'none'",
+        "frame-ancestors": "'none'"
+      },
+      "capabilities": [
+        "main"
+      ]
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": [
+      "nsis"
+    ],
+    "publisher": "Lustro contributors",
+    "copyright": "MIT License",
+    "category": "Utility",
+    "shortDescription": "See where your disk space went",
+    "longDescription": "A privacy-first disk usage explorer. Works offline; the only network request is the signed update check, which you can turn off.",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "createUpdaterArtifacts": true,
+    "windows": {
+      "webviewInstallMode": {
+        "type": "embedBootstrapper"
+      },
+      "nsis": {
+        "installMode": "currentUser",
+        "displayLanguageSelector": false,
+        "startMenuFolder": "",
+        "installerIcon": "icons/icon.ico"
+      }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "PLACEHOLDER_UPDATER_PUBKEY__SET_BEFORE_RELEASE",
+      "requireSignedVersion": true,
+      "endpoints": [
+        "https://github.com/silent-diffusion/lustro/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
+  }
+}

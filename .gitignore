@@ -1,0 +1,45 @@
+# Third-party design references: not ours to publish
+Design ideas/
+
+# Claude Code tooling and internal coordination notes (local only)
+.claude/
+PLAN.md
+design/HANDOFF.md
+
+# Secrets, keys and environment files
+.env
+.env.*
+*.pem
+*.key
+*.pfx
+*.p12
+*.keystore
+*.minisign
+*.minisig
+tauri-signing*
+*.secret
+
+# Scan data, snapshots, exports and logs (contain real file paths)
+*.sqlite
+*.sqlite3
+*.db
+snapshots/
+exports/
+*.log
+
+# Build output, generated files and dependencies
+target/
+node_modules/
+dist/
+build/
+coverage/
+*.pdb
+app/src-tauri/binaries/
+app/src-tauri/gen/
+
+# OS and editor clutter
+Thumbs.db
+desktop.ini
+.DS_Store
+.vscode/
+.idea/

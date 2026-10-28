@@ -1,0 +1,126 @@
+/* Terrain module styles. Bundled with the module (no inline <style>), so a strict CSP is fine.
+   Colors come from --svt-* variables that the module sets from its theme palette. */
+
+.svt-root {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  font-family: var(--font-ui, "Manrope", "Segoe UI Variable", "Segoe UI", system-ui, sans-serif);
+  user-select: none;
+}
+.svt-gl,
+.svt-flat {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  touch-action: none;
+  outline: none;
+}
+.svt-flat { cursor: grab; }
+.svt-flat:active { cursor: grabbing; }
+.svt-flat:focus-visible { box-shadow: inset 0 0 0 2px var(--svt-accent); }
+
+.svt-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.svt-pin {
+  position: absolute;
+  left: 0;
+  top: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  pointer-events: auto;
+  cursor: pointer;
+  will-change: transform;
+}
+.svt-pin .svt-head {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  color: var(--svt-pin-ink);
+  box-shadow: 0 0 0 3px var(--svt-halo);
+  transform: translateY(0);
+}
+.svt-pin .svt-head svg { width: 14px; height: 14px; }
+/* The head is centred on the anchor; the stem hangs from the head's centre. */
+.svt-pin .svt-stem {
+  position: absolute;
+  top: 50%;
+  width: 2px;
+  background: currentColor;
+  opacity: 0.7;
+  z-index: -1;
+}
+.svt-pin:focus-visible { outline: none; }
+.svt-pin:focus-visible .svt-head { box-shadow: 0 0 0 3px var(--svt-accent); }
+.svt-pin.svt-largest { color: var(--svt-text); }
+.svt-pin.svt-largest .svt-head { background: var(--svt-text); }
+.svt-pin.svt-grew { color: var(--svt-grew); }
+.svt-pin.svt-grew .svt-head { background: var(--svt-grew); }
+.svt-pin.svt-duplicate { color: var(--svt-accent); }
+.svt-pin.svt-duplicate .svt-head { background: var(--svt-accent); }
+.svt-pin.svt-cloud { color: var(--svt-cloud); }
+.svt-pin.svt-cloud .svt-head {
+  background: transparent;
+  border: 2px dashed var(--svt-cloud);
+  color: var(--svt-cloud);
+}
+.svt-pin.svt-start { color: var(--svt-text); pointer-events: none; }
+.svt-pin.svt-start .svt-head {
+  width: 24px;
+  height: 24px;
+  background: var(--svt-text);
+  color: var(--svt-surface-ink);
+  font: 700 10px/1 var(--font-ui, system-ui, sans-serif);
+}
+.svt-pin.svt-dim { opacity: 0.25; }
+
+.svt-compact .svt-pin .svt-head { width: 20px; height: 20px; box-shadow: 0 0 0 2px var(--svt-halo); }
+.svt-compact .svt-pin .svt-head svg { width: 11px; height: 11px; }
+
+.svt-ring-label {
+  position: absolute;
+  left: 0;
+  top: 0;
+  font-size: 11px;
+  font-weight: 650;
+  color: var(--svt-text2);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.svt-tip {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 20000;
+  max-width: 280px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: var(--svt-surface);
+  border: 1px solid var(--svt-stroke);
+  color: var(--svt-text2);
+  font-size: 12px;
+  line-height: 1.45;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+  pointer-events: none;
+}
+.svt-tip-title {
+  color: var(--svt-text);
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}

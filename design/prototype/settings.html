@@ -1,0 +1,284 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lustro · Settings</title>
+<link rel="stylesheet" href="../tokens.css?v=20">
+<link rel="stylesheet" href="app.css?v=20">
+<style>
+  .st { grid-template-columns: 220px minmax(0, 1fr); align-items: start; }
+  .side { position: sticky; top: 16px; display: grid; gap: 2px; padding: 10px; }
+  .side a { padding: 9px 12px; border-radius: var(--r-sm); color: var(--text-2); display: flex; gap: 10px; align-items: center; }
+  .side a svg { width: 16px; height: 16px; }
+  .side a:hover, .side a.on { background: var(--surface-2); color: var(--text); }
+  .sections { display: grid; gap: var(--sp-4); }
+  .sections h3 { margin: 18px 0 8px; font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: .06em; color: var(--text-3); }
+  .tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+  .tile { border: 1.5px solid var(--stroke); border-radius: var(--r-md); padding: 10px; cursor: pointer; background: var(--surface-2); display: grid; gap: 8px; }
+  .tile.on { border-color: var(--accent); }
+  .tile svg.pv { width: 100%; height: 86px; display: block; }
+  .tile .t { display: flex; justify-content: space-between; align-items: center; }
+  .tile .tag { font-size: 10px; color: var(--accent); }
+  .opt { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 14px; align-items: center; padding: 12px 0; border-top: 1px solid var(--stroke); }
+  .opt:first-of-type { border-top: 0; }
+  .opt small { display: block; color: var(--text-3); font-size: var(--fs-xs); margin-top: 2px; }
+  .switch { width: 40px; height: 22px; border-radius: 11px; background: var(--surface-3); position: relative; cursor: pointer; border: 1px solid var(--stroke-strong); transition: background .2s; }
+  .switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: var(--text-2); transition: transform .2s var(--ease), background .2s; }
+  .switch.on { background: var(--accent); border-color: var(--accent); }
+  .switch.on::after { transform: translateX(18px); background: var(--accent-ink); }
+  .switch.locked { opacity: .55; cursor: not-allowed; }
+  .privacy { background: color-mix(in srgb, var(--lime) 6%, var(--surface-1)); }
+  .privacy ul { margin: 8px 0 0; padding-left: 18px; color: var(--text-2); }
+  .privacy li { margin: 4px 0; }
+  @media (max-width: 1000px) { .st { grid-template-columns: 1fr; } .side { position: static; grid-auto-flow: column; overflow-x: auto; } .tiles { grid-template-columns: 1fr 1fr; } }
+</style>
+</head>
+<body>
+<main class="page">
+  <div class="grid st">
+    <nav class="card side" id="side"></nav>
+    <div class="sections">
+      <section class="card" id="viz">
+        <div class="card-head"><div class="ic" id="ic-viz"></div><h2>Visualization</h2></div>
+        <h3>Main view · used in Explore and on the Cleanup map</h3>
+        <div class="tiles" id="views"></div>
+        <h3>Terrain</h3>
+        <div id="terrain-opts"></div>
+      </section>
+
+      <section class="card" id="appearance">
+        <div class="card-head"><div class="ic" id="ic-app"></div><h2>Appearance</h2></div>
+        <h3>Theme</h3>
+        <div class="seg" id="theme"><button data-t="dark">Dark</button><button data-t="light">Light</button><button data-t="system" id="theme-sys">Match system</button></div>
+        <h3>Density</h3>
+        <div class="seg"><button class="on">Comfortable</button><button>Compact</button></div>
+        <div id="app-opts" style="margin-top:8px"></div>
+      </section>
+
+      <section class="card" id="scanning">
+        <div class="card-head"><div class="ic" id="ic-scan"></div><h2>Scanning</h2></div>
+        <h3>Scan mode</h3>
+        <div class="seg" id="mode"><button class="on">Standard</button><button>Fast scan</button></div>
+        <p class="faint" style="font-size:var(--fs-xs);margin:8px 0 0" id="mode-note"></p>
+        <div id="fda"></div>
+        <h3>Excluded folders</h3>
+        <div style="display:flex;gap:6px;flex-wrap:wrap" id="excluded"></div>
+        <div id="scan-opts" style="margin-top:8px"></div>
+        <h3>Cloud files · same rules for every provider</h3>
+        <p class="faint" style="font-size:var(--fs-xs);margin:0 0 6px" id="cloud-note"></p>
+        <div id="cloud-provs"></div>
+        <div id="cloud-opts"></div>
+      </section>
+
+      <section class="card" id="snapshots">
+        <div class="card-head"><div class="ic" id="ic-snap"></div><h2>Snapshots</h2></div>
+        <div id="snap-opts"></div>
+        <div class="opt"><div>Stored at<small class="mono"><span id="snap-path"></span> · 8 snapshots · 46 MB</small></div><button class="btn small">Delete all snapshots</button></div>
+      </section>
+
+      <section class="card" id="safety">
+        <div class="card-head"><div class="ic" id="ic-safe"></div><h2>Cleanup safety</h2></div>
+        <div id="safe-opts"></div>
+        <h3>Protected paths</h3>
+        <div style="display:flex;gap:6px;flex-wrap:wrap" id="protected"></div>
+        <div class="opt" style="margin-top:8px"><div>Kept items<small>3 items you chose to keep in Cleanup are never suggested again</small></div><button class="btn small">Manage</button></div>
+      </section>
+
+      <section class="card" id="updates">
+        <div class="card-head"><div class="ic" id="ic-upd"></div><h2>Updates</h2></div>
+        <div class="opt"><div>Lustro <span class="mono" id="cur-ver"></span><small id="cur-sub"></small></div><button class="btn small" id="cur-notes">Release notes</button></div>
+        <div class="opt"><div>Auto-update<small>Checks once a day and downloads new versions in the background. They install the next time Lustro starts. Never interrupts a scan or a cleanup.</small></div><div class="switch on" id="auto"></div></div>
+        <div class="opt" id="check-row"><div id="upd-status"></div><div id="upd-action"></div></div>
+        <div class="opt" id="skip-row" hidden><div>Skipped <span class="mono" id="skip-ver"></span><small>You won't be reminded about this version. Newer versions still show up.</small></div><button class="btn small" id="skip-undo">Undo</button></div>
+        <div class="proto-sim"><span>Prototype · simulate:</span>
+          <button data-sim="available">Update available</button><button data-sim="uptodate">Up to date</button><button data-sim="offline">Offline</button>
+          <button data-sim="download">Download fails</button><button data-sim="verify">Signature fails</button>
+          <button data-sim="toast">Auto-update ready</button><button data-sim="scanning">Ready during a scan</button><button data-sim="after">After restart</button></div>
+      </section>
+
+      <section class="card privacy" id="privacy">
+        <div class="card-head"><div class="ic" id="ic-priv"></div><h2>Privacy</h2><span class="badge safe">Private by design</span></div>
+        <div>Lustro works entirely on this computer.</div>
+        <ul>
+          <li>No telemetry, analytics or crash uploads.</li>
+          <li id="priv-net"></li>
+          <li>No account or sign-in.</li>
+          <li>Scan snapshots stay in your user folder and are never shared.</li>
+          <li>Exports (CSV/JSON) include full paths. Review them before sharing.</li>
+        </ul>
+      </section>
+    </div>
+  </div>
+</main>
+
+<script src="data.js?v=20"></script>
+<script src="shell.js?v=20"></script>
+<script src="updates.js?v=20"></script>
+<script>
+  Lustro.shell("settings", false);
+  const I = Lustro.icons, P = Lustro.P, $ = (id) => document.getElementById(id);
+  [["ic-viz", I.blocks], ["ic-app", I.spark], ["ic-scan", I.scan], ["ic-snap", I.clock], ["ic-safe", I.shield], ["ic-priv", I.shield]].forEach(([id, ic]) => ($(id).innerHTML = ic));
+
+  const nav = [["viz", "Visualization", I.blocks], ["appearance", "Appearance", I.spark], ["scanning", "Scanning", I.scan], ["snapshots", "Snapshots", I.clock], ["safety", "Cleanup safety", I.shield], ["updates", "Updates", I.cloudDown], ["privacy", "Privacy", I.info]];
+  $("side").innerHTML = nav.map(([id, l, ic], k) => `<a href="#${id}" class="${k ? "" : "on"}">${ic}${l}</a>`).join("");
+  $("side").onclick = (e) => { const a = e.target.closest("a"); if (a) [...$("side").children].forEach((x) => x.classList.toggle("on", x === a)); };
+
+  // Mini previews for the view picker, drawn with category colors.
+  const c = (k) => `var(--cat-${k})`;
+  const previews = {
+    blocks: `<svg class="pv" viewBox="0 0 120 70"><rect x="0" y="0" width="58" height="44" rx="3" fill="${c("video")}"/><rect x="0" y="46" width="58" height="24" rx="3" fill="${c("dev")}"/><rect x="60" y="0" width="60" height="30" rx="3" fill="${c("apps")}"/><rect x="60" y="32" width="28" height="38" rx="3" fill="${c("images")}"/><rect x="90" y="32" width="30" height="20" rx="3" fill="${c("system")}"/><rect x="90" y="54" width="30" height="16" rx="3" fill="${c("archives")}"/></svg>`,
+    ring: `<svg class="pv" viewBox="0 0 120 70"><g transform="translate(60 35)" fill="none" stroke-width="9"><circle r="14" stroke="${c("apps")}" stroke-dasharray="40 100"/><circle r="14" stroke="${c("video")}" stroke-dasharray="0 40 48 100"/><circle r="25" stroke="${c("images")}" stroke-dasharray="60 200"/><circle r="25" stroke="${c("dev")}" stroke-dasharray="0 62 50 200"/><circle r="25" stroke="${c("system")}" stroke-dasharray="0 115 30 200"/></g></svg>`,
+    icicle: `<svg class="pv" viewBox="0 0 120 70"><rect x="0" y="0" width="28" height="70" rx="3" fill="${c("apps")}"/><rect x="30" y="0" width="28" height="40" rx="3" fill="${c("video")}"/><rect x="30" y="42" width="28" height="28" rx="3" fill="${c("system")}"/><rect x="60" y="0" width="28" height="22" rx="3" fill="${c("video")}"/><rect x="60" y="24" width="28" height="16" rx="3" fill="${c("images")}"/><rect x="90" y="0" width="30" height="12" rx="3" fill="${c("video")}"/><rect x="90" y="14" width="30" height="8" rx="3" fill="${c("dev")}"/></svg>`,
+    terrain: `<svg class="pv" viewBox="0 0 120 70" fill="none" stroke="var(--terrain-line)" stroke-width=".8"><ellipse cx="60" cy="56" rx="54" ry="11" stroke="var(--accent)" stroke-width="1.4"/><path d="M14 56c14-6 18-24 30-26s10-16 18-17 12 10 18 14 14 20 26 29"/><path d="M22 54c10-5 16-18 25-20s9-12 15-12 9 8 14 11 12 16 22 21" opacity=".7"/><path d="M32 52c8-4 12-12 18-13s7-8 12-8 7 6 11 8 9 10 16 13" opacity=".5"/><line x1="62" y1="13" x2="62" y2="4" stroke="var(--text)"/><circle cx="62" cy="4" r="3" fill="var(--text)"/></svg>`,
+  };
+  const VIEWS = { blocks: "Block map", ring: "Ring chart", icicle: "File tree", terrain: "Terrain 3D" };
+  function drawViews() {
+    const cur = Lustro.pref("view") || "blocks";
+    $("views").innerHTML = Object.entries(VIEWS).map(([k, l]) => `<div class="tile ${k === cur ? "on" : ""}" data-v="${k}">${previews[k]}<div class="t"><span>${l}</span>${k === "blocks" ? '<span class="tag">Recommended</span>' : ""}</div></div>`).join("");
+  }
+  $("views").onclick = (e) => { const t = e.target.closest(".tile"); if (t) { Lustro.pref("view", t.dataset.v); drawViews(); } };
+  drawViews();
+
+  const opts = (el, list) => {
+    $(el).innerHTML = list.map(([t, s, on, locked]) => `<div class="opt"><div>${t}<small>${s}</small></div><div class="switch ${on ? "on" : ""} ${locked ? "locked" : ""}" ${locked ? 'title="Always on"' : ""}></div></div>`).join("");
+  };
+  opts("terrain-opts", [
+    ["Tint ground by file type", "Colors each patch with its main category, like a geology map", true],
+    ["Show largest-file pins", "Flag pins on the biggest files", true],
+    ["Show growth pins", "Coral arrows on the top growers since the last scan", true],
+    ["Show duplicate pins", "Blue pins on duplicate sets", true],
+    ["Cloud-only files as valleys", "Land slopes to ground level, then dips below: depth = size stored only in the cloud", true],
+    ["Start in top-down view", "Flat contour map instead of 3D, easier to read for some people", false],
+    ["Slowly rotate on Overview", "Turned off automatically when your system's reduce-motion setting is on", P.id !== "linux"],
+    ["Use 2D when 3D is slow", "Switches to the flat map if the frame rate drops, with a “Try 3D anyway” button", true],
+  ]);
+  opts("app-opts", [["Reduce motion", "Follows your system's setting by default", false], ["Show sizes in binary units", "GiB (1 GiB = 1,024 MiB) instead of GB", P.id === "win"]]);
+
+  // Scanning shows only the options that apply to this OS.
+  $("mode-note").textContent = P.standardScan + " " + P.fastScan;
+  $("excluded").innerHTML = P.excluded.map((x) => `<span class="chip mono">${x} ✕</span>`).join("") + `<span class="chip">+ Add folder</span>`;
+  const scanOpts = {
+    win: [["Count hard links once", "Avoids double-counting files that appear in more than one folder", true],
+          ["Don't follow junctions and symbolic links", "Prevents loops and double counting", true, true]],
+    mac: [["Count hard links and APFS clones once", "Clones share storage until edited; counting them twice overstates use", true],
+          ["Skip firmlinked system folders", "/System/Volumes would otherwise show macOS twice", true, true],
+          ["Count Time Machine local snapshots", "Shown in “Where did my space go?”", true]],
+    linux: [["Count hard links once", "Matched by device and inode", true],
+            ["Stay on one filesystem", "Don't cross into other mounts unless you add them", true],
+            ["Skip /proc, /sys, /dev and /run", "Not real files", true, true],
+            ["Count btrfs/ZFS snapshots", "Only when the filesystem supports them", false]],
+  }[P.id];
+  opts("scan-opts", [...scanOpts, ["Scan on startup", "Uses Standard scan and takes a snapshot", false]]);
+
+  // macOS: explain Full Disk Access before asking for it.
+  if (P.id === "mac") $("fda").innerHTML = `<div class="card" style="margin-top:14px;background:var(--surface-2);box-shadow:none">
+    <div class="card-head" style="margin-bottom:8px"><div class="ic" style="background:var(--surface-1)">${I.shield}</div><h2>Full Disk Access</h2><span class="badge review">Not granted</span></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;font-size:var(--fs-sm)">
+      <div><b>Why we ask</b><ul style="margin:6px 0 0;padding-left:18px;color:var(--text-2)"><li>macOS hides Mail, Messages, Safari and some Library folders from apps by default.</li><li>Without access those show up as “Unexplained” space.</li></ul></div>
+      <div><b>What we never do</b><ul style="margin:6px 0 0;padding-left:18px;color:var(--text-2)"><li>Open or read your files' contents.</li><li>Download cloud files or send anything off this Mac.</li><li>Change or delete anything without your review.</li></ul></div>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:12px"><button class="btn primary">Open Privacy &amp; Security settings</button><button class="btn">Not now</button></div></div>`;
+
+  $("snap-path").textContent = { win: "%LOCALAPPDATA%\\Lustro\\snapshots", mac: "~/Library/Application Support/Lustro", linux: "~/.local/share/lustro" }[P.id];
+  $("protected").innerHTML = P.protected.map(([n]) => `<span class="chip mono">${n}</span>`).join("") + `<span class="chip">+ Add path</span>`;
+  $("theme-sys").textContent = P.themeSystem;
+  opts("snap-opts", [["Save a snapshot after every scan", "Needed for What grew", true], ["Keep the last 12 snapshots", "Older ones are deleted automatically", true]]);
+  opts("safe-opts", [
+    ["Always use the " + P.trash, "Lustro never permanently deletes files", true, true],
+    ["Review screen before applying", "Shows every path and the total before anything moves", true, true],
+    ["Block protected paths", "System and app folders can't be added to the basket", true, true],
+  ]);
+  // ---------- Updates ----------
+  const U = Lustro.updates, info = U.FAKE;
+  $("ic-upd").innerHTML = I.cloudDown;
+  $("cur-ver").textContent = U.CURRENT;
+  $("cur-sub").textContent = "Installed Oct 2, 2026 · " + { win: "Windows", mac: "macOS", linux: "Linux" }[P.id] + " · signed updates from GitHub Releases";
+  $("cur-notes").onclick = () => U.notesDialog({ ...info, version: U.CURRENT, notes: "## 0.2.0\n- Cloud files from every provider, with one set of rules.\n- Cleanup is now a review queue." });
+  let sim = "available", skipped = null, lastChecked = "today at 9:14";
+  function privacyLine() {
+    const on = $("auto").classList.contains("on");
+    $("priv-net").innerHTML = "<b>One network request: the update check.</b> Lustro asks GitHub Releases over HTTPS whether a newer version exists" +
+      (on ? ", once a day while auto-update is on, and when you click “Check for updates”." : ". Auto-update is off, so this only happens when you click “Check for updates”.") +
+      " It sends no personal information: no ID, no usage data, nothing about your files. Like any web request, GitHub can see your IP address. Turn off auto-update to stop the daily check.";
+  }
+  // Mirrors UpdateStatus: idle | checking | upToDate | available | downloading | ready | error.
+  function status(s, extra = {}) {
+    const st = $("upd-status"), act = $("upd-action");
+    const btn = (label, cls, fn) => { act.innerHTML = `<button class="btn small ${cls}">${label}</button>`; act.firstChild.onclick = fn; };
+    if (s === "idle") { st.innerHTML = `Check for updates<small>Last checked ${lastChecked}</small>`; btn("Check for updates", "", check); }
+    if (s === "checking") { st.innerHTML = `<span class="spin"></span> Checking for updates…<small>Asking GitHub Releases for the latest version</small>`; act.innerHTML = `<button class="btn small" disabled>Check for updates</button>`; }
+    if (s === "upToDate") { lastChecked = "just now"; st.innerHTML = `<span class="badge safe">Up to date</span> You have the latest version<small>Checked just now</small>`; btn("Check for updates", "", check); }
+    if (s === "available") { st.innerHTML = `<span class="badge cloud">${info.version} available</span> A new version is ready to download<small>Released Oct 27, 2026 · 14.2 MB</small>`; btn("View update", "primary", () => open()); }
+    if (s === "downloading") { const pct = Math.round((extra.got / extra.total) * 100); st.innerHTML = `Downloading ${info.version} · ${pct}%<div class="progress" style="max-width:320px"><i style="width:${pct}%"></i></div>`; act.innerHTML = ""; }
+    if (s === "ready") { st.innerHTML = `<span class="badge cloud">${info.version} ready</span> Downloaded and verified<small>Installs the next time Lustro starts</small>`; btn("Restart to update", "primary", () => U.restart(info)); }
+    if (s === "error") {
+      st.innerHTML = extra.kind === "verify"
+        ? `<span class="badge locked">Not installed</span> The last update couldn't be verified<small>Your current version is unchanged</small>`
+        : `<span class="badge review">Couldn't check</span> Couldn't check for updates. You're offline or GitHub is unreachable.<small>Last successful check ${lastChecked}</small>`;
+      btn("Retry", "", check);
+    }
+    U.gearDot(s === "ready" || s === "available");
+  }
+  function open() {
+    U.dialog(info, {
+      fail: sim === "download" ? "download" : sim === "verify" ? "verify" : null,
+      onSkip: (v) => { skipped = v; $("skip-ver").textContent = v; $("skip-row").hidden = false; status("idle"); },
+      onStatus: (s) => status(s.state === "downloading" ? "downloading" : s.state, s),
+    });
+  }
+  function check() {
+    status("checking");
+    setTimeout(() => {
+      if (sim === "offline") return status("error", { kind: "offline" });
+      if (sim === "uptodate" || skipped === info.version) return status("upToDate");
+      status("available"); open();
+    }, 1200);
+  }
+  $("skip-undo").onclick = () => { skipped = null; $("skip-row").hidden = true; status("idle"); };
+  $("auto").onclick = () => { $("auto").classList.toggle("on"); privacyLine(); };
+  document.querySelector(".proto-sim").onclick = (e) => {
+    const b = e.target.closest("button"); if (!b) return;
+    sim = b.dataset.sim;
+    document.querySelectorAll(".upd-bg, .toast, .busy-chip").forEach((x) => x.remove());
+    if (["available", "uptodate", "offline", "download", "verify"].includes(sim)) { if (sim !== "uptodate") skipped = null; return check(); }
+    if (sim === "toast") { status("ready"); U.toast(info, { onLater: () => U.gearDot(true) }); }
+    if (sim === "scanning") {
+      // A scan is running: the update downloads quietly, the toast is held, and only the gear dot shows.
+      status("ready");
+      const chip = document.createElement("div"); chip.className = "busy-chip";
+      chip.innerHTML = `<span class="spin"></span> Scanning ${Lustro.data.drive.short} · <span class="mono" id="busy-pct">40%</span> <span class="faint">· update held until the scan finishes</span>`;
+      document.body.appendChild(chip);
+      let p = 40; const t = setInterval(() => { p += 6; const el = document.getElementById("busy-pct"); if (el) el.textContent = Math.min(p, 100) + "%";
+        if (p >= 100) { clearInterval(t); chip.remove(); U.toast(info, { onLater: () => U.gearDot(true) }); } }, 300);
+    }
+    if (sim === "after") U.restart(info);
+  };
+  privacyLine();
+  status("idle");
+  // Providers found in this platform's sample tree, plus (Linux) remote mounts that aren't scanned.
+  $("cloud-note").textContent = {
+    win: "Found from the sync folders registered with Windows, plus virtual drives such as Google Drive's G:. Downloaded and pinned files always count as local space.",
+    mac: "Found under ~/Library/CloudStorage (and iCloud Drive). Same three states: cloud only, downloaded, always on this Mac. Folders that are cloud-only are never opened, which would start a download.",
+    linux: "Dropbox keeps full local copies. Other cloud drives are usually network mounts (rclone, FUSE): listed, not scanned unless you turn it on.",
+  }[P.id];
+  const provRoots = {};
+  Lustro.all(Lustro.data.root).forEach((n) => { if (n.provider && !(n.parent && n.parent.provider) && !provRoots[n.provider]) provRoots[n.provider] = n.path; });
+  const gd = Lustro.data.drives.find((d) => d.virtual);
+  if (gd) provRoots.gdrive = gd.short + " virtual drive (Stream) · cache in " + provRoots.gdrive;
+  $("cloud-provs").innerHTML = Object.entries(provRoots).map(([k, where]) => `<div class="opt"><div><span class="cmark">${Lustro.PROVIDERS[k].short}</span> ${Lustro.PROVIDERS[k].label}<small class="mono">${where}</small></div><div class="switch on" title="Show in views"></div></div>`).join("") +
+    Lustro.data.remotes.map((r) => `<div class="opt"><div><span class="cmark">${Lustro.PROVIDERS[r.provider].short}</span> ${Lustro.PROVIDERS[r.provider].label} <span class="badge">remote mount</span><small class="mono">${r.path} · ${r.via} · scan anyway</small></div><div class="switch" title="Scan this mount"></div></div>`).join("");
+  opts("cloud-opts", [
+    ["Count cloud-only files in totals", "Off: totals show what's really on this disk. On: adds cloud-only sizes, marked as not local", false],
+    ["Mark downloaded and pinned files", "Small provider tag on blocks and rows; they keep their file-type color", true],
+    ["Never download cloud files", "Scanning reads attributes only. Duplicate checks skip cloud-only files", true, true],
+  ]);
+  document.querySelectorAll(".switch:not(.locked)").forEach((s) => (s.onclick = () => s.classList.toggle("on")));
+
+  const th = () => [...$("theme").children].forEach((b) => b.classList.toggle("on", b.dataset.t === Lustro.theme()));
+  $("theme").onclick = (e) => { const b = e.target.closest("button"); if (b) { Lustro.setTheme(b.dataset.t); th(); } };
+  th();
+  $("mode").onclick = (e) => { const b = e.target.closest("button"); if (b) [...$("mode").children].forEach((x) => x.classList.toggle("on", x === b)); };
+</script>
+</body>
+</html>
