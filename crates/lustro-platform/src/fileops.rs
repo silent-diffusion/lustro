@@ -215,13 +215,22 @@ fn restore_from_trash(item: &UndoItem) -> io::Result<()> {
     let want: Vec<String> = want.iter().map(|w| paths::key(w, ci)).collect();
     let items =
         trash::os_limited::list().map_err(|_| io::Error::other("couldn't read the trash"))?;
-    // Same original path, and deleted within RESTORE_WINDOW_SECS of our deletion time
-    // (when known), so an older item the user trashed from the same path is never picked.
+    // Deleted within RESTORE_WINDOW_SECS of our deletion time (when known), so an older
+    // item the user trashed from the same path is never picked, and the same original
+    // path. The bin may record the folder in another form than the one we passed (GitHub's
+    // Windows runners record the 8.3 short name of the profile folder), so a recorded path
+    // also counts in its long, final form: the same folder, never a different one.
     // If several remain, the one closest to our deletion time.
+    let same_path = |t: &trash::TrashItem| {
+        let recorded = t.original_path();
+        want.contains(&paths::key(&recorded.to_string_lossy(), ci))
+            || long_form(&recorded)
+                .is_some_and(|l| want.contains(&paths::key(&l.to_string_lossy(), ci)))
+    };
     let found = items
         .into_iter()
-        .filter(|t| want.contains(&paths::key(&t.original_path().to_string_lossy(), ci)))
         .filter(|t| deleted_at.is_none_or(|d| (t.time_deleted - d).abs() <= RESTORE_WINDOW_SECS))
+        .filter(same_path)
         .min_by_key(|t| deleted_at.map_or(-t.time_deleted, |d| (t.time_deleted - d).abs()))
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "item is no longer in the trash"))?;
     trash::os_limited::restore_all([found]).map_err(|e| match e {
@@ -466,7 +475,7 @@ mod tests {
             restored: false,
         };
         if CAN_RESTORE {
-            o.restore(&item).unwrap();
+            restore_or_explain(&o, &item);
             assert_eq!(std::fs::read(&f).unwrap(), b"Lustro undo test");
         } else {
             assert_eq!(
@@ -514,9 +523,69 @@ mod tests {
                 undoable: out.undoable,
                 restored: false,
             };
-            o.restore(&item).unwrap();
+            restore_or_explain(&o, &item);
             assert_eq!(std::fs::read(&f).unwrap(), b"short path undo");
         }
+    }
+
+    /// Restores `item`; on failure, says why without printing any path.
+    fn restore_or_explain(o: &PlatformTrash, item: &UndoItem) {
+        if let Err(e) = o.restore(item) {
+            panic!("{e}; {}", bin_report(item));
+        }
+    }
+
+    /// Path-free summary of the bin against `item`: counts, time deltas, and which
+    /// comparison failed for the items with the same name.
+    #[cfg(any(windows, all(unix, not(target_os = "macos"))))]
+    fn bin_report(item: &UndoItem) -> String {
+        use lustro_cloud::paths;
+        let ci = Os::current().case_insensitive();
+        let Ok(items) = trash::os_limited::list() else {
+            return "the bin can't be listed".into();
+        };
+        let token = item.token.as_deref().unwrap_or("");
+        let (time, recorded) = token.split_once(' ').unwrap_or((token, ""));
+        let at: Option<i64> = time.parse().ok();
+        let want = paths::key(recorded, ci);
+        let name = item
+            .original
+            .file_name()
+            .map(|n| n.to_string_lossy().to_lowercase());
+        let mut out = format!(
+            "bin items: {}; token has path: {}; ",
+            items.len(),
+            !recorded.is_empty()
+        );
+        let same_name: Vec<_> = items
+            .iter()
+            .filter(|t| Some(t.name.to_string_lossy().to_lowercase()) == name)
+            .collect();
+        out += &format!("same name: {}", same_name.len());
+        for t in same_name {
+            let rec = t.original_path();
+            let rec_s = rec.to_string_lossy();
+            let long = long_form(&rec);
+            out += &format!(
+                "\n  delta {:?} s; exact: {}; long form: {} (found {}); recorded has `~`: {}, \
+                 `\\\\?\\`: {}, drive letter: {}; ours has `~`: {}",
+                at.map(|a| t.time_deleted - a),
+                paths::key(&rec_s, ci) == want,
+                long.as_ref()
+                    .is_some_and(|l| paths::key(&l.to_string_lossy(), ci) == want),
+                long.is_some(),
+                rec_s.contains('~'),
+                rec_s.starts_with(r"\\?\"),
+                crate::recycle::is_drive_letter_path(&rec),
+                recorded.contains('~'),
+            );
+        }
+        out
+    }
+
+    #[cfg(not(any(windows, all(unix, not(target_os = "macos")))))]
+    fn bin_report(_item: &UndoItem) -> String {
+        String::new()
     }
 
     /// Trashes a fresh temp file; returns it and its undo item.
@@ -559,7 +628,7 @@ mod tests {
         }
         assert!(!f.exists());
         // Our own token still finds it (and cleans up).
-        ops(None).restore(&item).unwrap();
+        restore_or_explain(&ops(None), &item);
         assert!(f.exists());
     }
 
@@ -591,9 +660,9 @@ mod tests {
                 original: elsewhere,
                 ..item.clone()
             };
-            ops(None).restore(&upper).unwrap();
+            restore_or_explain(&ops(None), &upper);
         } else {
-            ops(None).restore(&item).unwrap();
+            restore_or_explain(&ops(None), &item);
         }
         assert!(f.exists());
     }
