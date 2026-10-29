@@ -5,6 +5,21 @@ version is also what the app shows when it offers that update.
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-10-29
+
+### What's new
+- **Scans happen in place.** Starting a scan no longer opens its own page. Overview and Explore
+  fill in live as Lustro counts, with progress and a Stop button in the bar under the top bar.
+- **Full view** button on the terrain (or press Home) takes you back to the whole-drive view
+  after zooming in or flying to something.
+- The terrain keeps slowly turning at the full view. It pauses while you use it and eases back in
+  when you stop, but never while you're zoomed in or have something selected.
+- **Up next** in Cleanup is its own card, showing up to 8 items, with "Show all" for the rest.
+
+### Fixed
+- Overview now uses the main view chosen in Settings.
+- A long cleanup queue no longer runs off the screen; it becomes a single progress bar.
+
 ## [0.1.0] - 2026-10-28
 
 The first public preview of Lustro for Windows.

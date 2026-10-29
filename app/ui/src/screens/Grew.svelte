@@ -5,6 +5,7 @@
   import Icon from "../components/Icon.svelte";
   import Sparkline from "../components/Sparkline.svelte";
   import MainViz from "../components/MainViz.svelte";
+  import ScanBanner from "../components/ScanBanner.svelte";
 
   let snaps = $state.raw<SnapshotMeta[]>([]);
   let fromId = $state("");
@@ -94,6 +95,8 @@
     ? `≈ ${chart.perWeek.toFixed(1)} GB/week · full in ~${Math.max(1, Math.round(diff.daysUntilFull / 30))} months`
     : "not growing");
 </script>
+
+<ScanBanner text="Scanning… Comparison updates when the scan finishes." />
 
 {#if snaps.length < 2}
   <section class="card"><p class="faint">What grew needs two scans. Scan again later to compare.</p></section>

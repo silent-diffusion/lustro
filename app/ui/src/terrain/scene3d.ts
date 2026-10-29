@@ -10,10 +10,13 @@ import type { Layout, LayoutNode } from "./layout";
 import { centroid } from "./layout";
 import type { Palette, RGB } from "./palette";
 import { terrainArrays, tintArray } from "./geometry";
+import { HOME, UNDER, VIEW_MS, homeOnBearing, isHomeView, viewProgress } from "./rotation";
 
-const HOME_POS = new THREE.Vector3(0, 2.55, 3.55);
-const HOME_TARGET = new THREE.Vector3(0, 0.12, 0);
-const UNDER_POS = new THREE.Vector3(0.6, -1.6, 3.4);
+const HOME_POS = new THREE.Vector3(HOME.pos.x, HOME.pos.y, HOME.pos.z);
+const HOME_TARGET = new THREE.Vector3(HOME.target.x, HOME.target.y, HOME.target.z);
+const UNDER_POS = new THREE.Vector3(UNDER.pos.x, UNDER.pos.y, UNDER.pos.z);
+/** New data eases the heights in over this long, ms (live scans call setData about once a second). */
+const HEIGHT_MS = 400;
 const NONE = new THREE.Vector4(9, 9, 9, 9);
 
 const raw = (c: RGB) => new THREE.Color().setRGB(c[0], c[1], c[2], THREE.LinearSRGBColorSpace);
@@ -86,13 +89,19 @@ export class Scene3D {
   private routeMat = new THREE.LineDashedMaterial({ dashSize: 0.025, gapSize: 0.02 });
   private route: THREE.Line | null = null;
   private hm: Heightmap | null = null;
-  private posGoal: THREE.Vector3 | null = null;
-  private targetGoal: THREE.Vector3 | null = null;
+  /** Current view change (fly-to, full view, look under), time-based. */
+  private anim: { p0: THREE.Vector3; p1: THREE.Vector3; t0: THREE.Vector3; t1: THREE.Vector3; start: number } | null = null;
+  /** Height ease after new data: from → to, per vertex. */
+  private heights: { from: Float32Array; to: Float32Array; start: number } | null = null;
   private dirty = true;
   private ray = new THREE.Raycaster();
   private tmp = new THREE.Vector3();
-  /** Fraction of the remaining distance covered per frame by camera moves (1 = instant). */
-  ease = 0.12;
+  /** Duration of view changes, ms (0 = instant, for reduced motion). */
+  duration = VIEW_MS;
+  /** True while the user is dragging, zooming or touching the view. */
+  interacting = false;
+  /** Called when the user starts or stops interacting. */
+  onInteract: (() => void) | null = null;
 
   /** Throws if WebGL is unavailable or would run in software (callers fall back to 2D). */
   constructor(container: HTMLElement, pixelRatio: number) {
@@ -114,6 +123,7 @@ export class Scene3D {
     this.controls.enablePan = false;
     this.controls.autoRotateSpeed = 0.5;
     this.controls.addEventListener("start", this.onStart);
+    this.controls.addEventListener("end", this.onEnd);
     this.controls.addEventListener("change", this.onChange);
 
     this.mat = new THREE.ShaderMaterial({
@@ -151,13 +161,30 @@ export class Scene3D {
     this.scene.add(new THREE.LineSegments(tickGeo, this.tickMat));
   }
 
-  private onStart = () => { this.controls.autoRotate = false; this.posGoal = null; this.targetGoal = null; };
+  private onStart = () => { this.interacting = true; this.anim = null; this.onInteract?.(); };
+  private onEnd = () => { this.interacting = false; this.onInteract?.(); };
   private onChange = () => { this.dirty = true; };
 
   invalidate(): void { this.dirty = true; }
 
   setTerrain(hm: Heightmap, layout: Layout, palette: Palette): void {
     this.hm = hm;
+    const pos = this.geo.getAttribute("position") as THREE.BufferAttribute | undefined;
+    if (pos && pos.count === hm.n * hm.n) {
+      // Same grid (new data for the same view): update in place and ease the heights, so a live
+      // scan's updates grow the land instead of snapping it. The camera is untouched.
+      const tint = this.geo.getAttribute("tint") as THREE.BufferAttribute;
+      const cloud = this.geo.getAttribute("cloud") as THREE.BufferAttribute;
+      (tint.array as Float32Array).set(tintArray(hm, layout, palette)); tint.needsUpdate = true;
+      (cloud.array as Float32Array).set(hm.cloud); cloud.needsUpdate = true;
+      const arr = pos.array as Float32Array, from = new Float32Array(pos.count);
+      for (let k = 0; k < pos.count; k++) from[k] = arr[k * 3 + 1];
+      this.heights = { from, to: hm.h.slice(), start: performance.now() };
+      if (this.duration <= 0) this.stepHeights(Infinity);
+      this.dirty = true;
+      return;
+    }
+    this.heights = null;
     const a = terrainArrays(hm, layout, palette);
     for (const name of ["position", "sq", "tint", "cloud"]) this.geo.deleteAttribute(name);
     this.geo.setAttribute("position", new THREE.BufferAttribute(a.position, 3));
@@ -204,26 +231,44 @@ export class Scene3D {
     this.dirty = true;
   }
 
-  setAutoRotate(on: boolean): void { this.controls.autoRotate = on; this.dirty = true; }
+  /** Wheel/pinch zoom. Off in the compact card so scrolling the page passes over it. */
+  setZoomEnabled(on: boolean): void { this.controls.enableZoom = on; }
+
+  /** Camera frames the whole map (or the whole Look-under view) and isn't flying anywhere. */
+  isHome(under = false): boolean {
+    return !this.anim && !this.interacting && isHomeView(this.camera.position, this.controls.target, under);
+  }
+
+  private animate(pos: THREE.Vector3, target: THREE.Vector3): void {
+    this.anim = { p0: this.camera.position.clone(), p1: pos, t0: this.controls.target.clone(), t1: target, start: performance.now() };
+    this.dirty = true;
+  }
+
+  private stepHeights(now: number): void {
+    const hs = this.heights;
+    if (!hs) return;
+    const p = viewProgress(hs.start, now, HEIGHT_MS);
+    const pos = this.geo.getAttribute("position") as THREE.BufferAttribute, arr = pos.array as Float32Array;
+    for (let k = 0; k < hs.to.length; k++) arr[k * 3 + 1] = hs.from[k] + (hs.to[k] - hs.from[k]) * p;
+    pos.needsUpdate = true;
+    if (p >= 1) { this.heights = null; this.geo.computeBoundingSphere(); }
+    this.dirty = true;
+  }
 
   /** Fly in on a patch, looking at it from a raised angle on the side the camera is already on. */
   flyTo(n: LayoutNode, dist = 1.9): void {
     if (!this.hm) return;
-    this.controls.autoRotate = false;
     const [cx, cy] = centroid(n), [dx, dz] = toDisc(cx, cy);
     const at = new THREE.Vector3(dx, Math.max(0, sampleHeight(this.hm, cx, cy)) * 0.5, -dz);
     const t = this.controls.target, c = this.camera.position;
     const az = Math.atan2(c.x - t.x, c.z - t.z);
-    this.targetGoal = at;
-    this.posGoal = new THREE.Vector3(at.x + Math.sin(az) * dist * 0.75, at.y + dist * 0.7, at.z + Math.cos(az) * dist * 0.75);
-    this.dirty = true;
+    this.animate(new THREE.Vector3(at.x + Math.sin(az) * dist * 0.75, at.y + dist * 0.7, at.z + Math.cos(az) * dist * 0.75), at);
   }
 
+  /** "home" keeps the current bearing, so returning to the full view never swings round. */
   view(mode: "home" | "under"): void {
-    this.controls.autoRotate = false;
-    this.targetGoal = HOME_TARGET.clone();
-    this.posGoal = (mode === "under" ? UNDER_POS : HOME_POS).clone();
-    this.dirty = true;
+    const p = mode === "under" ? UNDER_POS : homeOnBearing(this.camera.position, this.controls.target);
+    this.animate(new THREE.Vector3(p.x, p.y, p.z), HOME_TARGET.clone());
   }
 
   resize(w: number, h: number): void {
@@ -237,20 +282,24 @@ export class Scene3D {
     this.dirty = true;
   }
 
-  /** Advances camera moves and renders if anything changed. Returns whether it rendered. */
-  update(): boolean {
-    const t = this.controls.target, c = this.camera.position;
-    if (this.targetGoal) {
-      t.lerp(this.targetGoal, this.ease);
-      if (t.distanceTo(this.targetGoal) < 0.002) { t.copy(this.targetGoal); this.targetGoal = null; }
+  /**
+   * Advances camera moves and renders if anything changed. Returns whether it rendered.
+   * @param spin auto-rotation speed factor 0..1 (see AutoSpin)
+   * @param dt seconds since the last frame, so the rotation speed doesn't depend on frame rate
+   */
+  update(spin = 0, dt = 1 / 60): boolean {
+    const now = performance.now();
+    if (this.anim) {
+      const a = this.anim, p = viewProgress(a.start, now, this.duration);
+      this.camera.position.lerpVectors(a.p0, a.p1, p);
+      this.controls.target.lerpVectors(a.t0, a.t1, p);
+      if (p >= 1) this.anim = null;
       this.dirty = true;
     }
-    if (this.posGoal) {
-      c.lerp(this.posGoal, this.ease);
-      if (c.distanceTo(this.posGoal) < 0.005) { c.copy(this.posGoal); this.posGoal = null; }
-      this.dirty = true;
-    }
-    this.controls.update(); // fires "change" (→ dirty) while damping or auto-rotating
+    if (this.heights) this.stepHeights(now);
+    this.controls.autoRotate = spin > 0;
+    this.controls.autoRotateSpeed = 0.5 * spin;
+    this.controls.update(Math.min(dt, 0.1)); // fires "change" (→ dirty) while damping or auto-rotating
     if (!this.dirty) return false;
     this.dirty = false;
     this.renderer.render(this.scene, this.camera);
@@ -285,6 +334,7 @@ export class Scene3D {
 
   dispose(): void {
     this.controls.removeEventListener("start", this.onStart);
+    this.controls.removeEventListener("end", this.onEnd);
     this.controls.removeEventListener("change", this.onChange);
     this.controls.dispose();
     this.setRoute(null);

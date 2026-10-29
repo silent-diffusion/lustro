@@ -9,7 +9,7 @@
     ["grew", "What grew", "grew"],
     ["cleanup", "Cleanup", "cleanup"],
   ];
-  const scanning = $derived(!!app.scan && !app.scan.done);
+  const scanning = $derived(app.scanning);
 </script>
 
 <header class="topbar chrome-{app.platform}">
@@ -22,9 +22,14 @@
     {/each}
   </nav>
   <div class="top-actions">
-    <button class="btn primary" onclick={() => app.startScan()} title="Scan ({app.kbd('R')})">
-      {#if scanning}<span class="pulse"></span>Scanning…{:else}<Icon name="scan" />Scan{/if}
-    </button>
+    {#if scanning}
+      <!-- While scanning it only reports progress: clicking does nothing and never cancels. -->
+      <button class="btn primary busy" aria-disabled="true" title="Scan in progress. Details are in the bar below.">
+        <span class="pulse"></span>Scanning · {Math.round(app.scanPct * 100)}%
+      </button>
+    {:else}
+      <button class="btn primary" onclick={() => app.startScan()} title="Scan ({app.kbd('R')})"><Icon name="scan" />Scan</button>
+    {/if}
     <a class="icon-btn gear" class:active={app.route === "settings"} class:has-dot={app.updatePending} href="#/settings"
       title={app.updatePending ? `Settings · ${app.update.state === "ready" ? "update ready" : "update available"}` : `Settings (${app.kbd(",")})`}
       aria-label={app.updatePending ? "Settings, update ready" : "Settings"}>
@@ -45,6 +50,7 @@
   .gear { position: relative; }
   .gear.has-dot::after { content: ""; position: absolute; top: 6px; right: 6px; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 2px var(--bg); }
   .top-actions { display: flex; justify-content: flex-end; align-items: center; gap: var(--sp-3); }
+  .busy { cursor: default; font-variant-numeric: tabular-nums; }
   .pulse { width: 8px; height: 8px; border-radius: 50%; background: var(--accent-ink); animation: pulse 1.4s infinite; }
   @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .3; } }
   @media (max-width: 900px) {

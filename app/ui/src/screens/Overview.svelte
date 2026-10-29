@@ -1,13 +1,17 @@
 <script lang="ts">
-  import type { Category, DiffDto, NodeDto, SpaceBreakdownDto, SuggestionDto, SuggestionGroup, TreeDto } from "../ipc/types";
+  import type { Category, DiffDto, MainView, NodeDto, NodeId, SpaceBreakdownDto, SuggestionDto, SuggestionGroup, TreeDto } from "../ipc/types";
   import type { PinKind, TerrainPin } from "../terrain/types";
-  import { app } from "../lib/app.svelte";
+  import { app, liveLoop } from "../lib/app.svelte";
   import { fmtMonthDay, fmtWhen } from "../lib/format";
   import { CATEGORY_LABEL, PROVIDER, catVar } from "../lib/labels";
   import type { IconName } from "../lib/icons";
   import Icon from "../components/Icon.svelte";
   import TerrainView from "../components/TerrainView.svelte";
+  import MainViz from "../components/MainViz.svelte";
+  import Legend from "../components/Legend.svelte";
   import Notes from "../components/Notes.svelte";
+  import FullViewButton from "../components/FullViewButton.svelte";
+  import { untrack } from "svelte";
 
   let space = $state.raw<SpaceBreakdownDto | null>(null);
   let diff = $state.raw<DiffDto | null>(null);
@@ -30,13 +34,62 @@
   });
 
   const vol = $derived(app.volume);
+  // The main chart follows Settings → Visualization. Explore's own view switch doesn't change it.
+  const view = $derived(app.settings.mainView);
+  const VIEW_HEAD: Record<Exclude<MainView, "terrain">, [string, IconName]> = {
+    blockMap: ["Block map", "blocks"], ringChart: ["Ring chart", "ring"], fileTree: ["File tree", "treeIc"],
+  };
+  /** Open in Explore with the Settings view (clears any Explore-only switch). */
+  function explore(id?: NodeId) {
+    app.exploreView = null;
+    app.go("explore", id);
+  }
+  // ---- Live scan: the page shows the tree as it grows (cards that need a finished scan are dimmed). ----
+  const live = $derived(app.live);
+  let liveCats = $state.raw<[Category, number][]>([]);
+  let liveTree = $state.raw<TreeDto | null>(null);
+  let liveLargest = $state.raw<NodeDto | null>(null);
+  // Category totals and the terrain's data: once a second (the terrain rebuilds its heightfield on each update).
+  $effect(() => {
+    const l = live;
+    if (!l) { liveTree = null; liveLargest = null; liveCats = []; return; }
+    const f = () => {
+      liveCats = [...l.byCategory()].sort((a, b) => b[1] - a[1]);
+      if (l.rootId != null) liveTree = l.tree(l.rootId, 8, 0.0002);
+      const big = l.largestFile == null ? undefined : l.nodes.get(l.largestFile);
+      liveLargest = big ? { ...big } : null;
+    };
+    untrack(f);
+    if (!l.running) return;
+    return liveLoop(f, 1000);
+  });
+  // Node ids are per scan: drop the previous tree and its pins when a new scan starts.
+  const scanId = $derived(app.scan?.id ?? null);
+  let seenScan: string | null = untrack(() => scanId);
+  $effect.pre(() => {
+    const id = scanId;
+    if (id === seenScan) return;
+    seenScan = id;
+    tree = null;
+    pinSrc = { largest: null, cloud: null };
+  });
+  const found = $derived(live?.progress.allocatedBytes ?? 0);
+  const notYet = $derived(Math.max(0, app.usedBytes - found));
+  const terrainTree = $derived(live ? liveTree : tree);
+
   const used = $derived(space?.usedBytes ?? 0);
   const cats = $derived(space?.segments.filter((s) => s.kind === "category") ?? []);
   const sys = $derived(space?.segments.filter((s) => s.kind === "system") ?? []);
   const cloudSeg = $derived(space?.segments.find((s) => s.kind === "cloudOnly"));
   const unexplained = $derived(space?.segments.find((s) => s.kind === "unexplained"));
+  /** While scanning, system rows (pagefile.sys…) appear once the scanner reaches them. */
+  const liveSys = $derived.by(() => {
+    void live?.tick;
+    return live ? sys.filter((x) => live.topNames.has(x.label)) : sys;
+  });
   // The type list counts system items under System again, so it matches the bar.
   const byType = $derived.by(() => {
+    if (live) return liveCats;
     const m = new Map<Category, number>();
     for (const s of cats) m.set(s.key as Category, s.bytes);
     m.set("system", (m.get("system") ?? 0) + sys.reduce((a, s) => a + s.bytes, 0));
@@ -64,6 +117,11 @@
   $effect(() => { flat = app.platform === "linux" || app.settings.terrain.prefer2d; });
   const pins = $derived.by(() => {
     const out: TerrainPin[] = [];
+    // Scanning: only the largest-file pin; growth and duplicate pins need the finished scan.
+    if (live) {
+      if (pinOn.largest && app.settings.terrain.pins.largest && liveLargest) out.push({ kind: "largest", nodeId: liveLargest.id, label: `${liveLargest.name} · ${app.fb(liveLargest.allocated)}` });
+      return out;
+    }
     if (pinOn.largest && pinSrc.largest) out.push({ kind: "largest", nodeId: pinSrc.largest.id, label: `${pinSrc.largest.name} · ${app.fb(pinSrc.largest.allocated)}` });
     if (pinOn.grew) for (const g of growers.slice(0, 2)) if (g.id != null) out.push({ kind: "grew", nodeId: g.id, label: `${g.name} ${app.fb(g.delta, true)}` });
     if (pinOn.duplicate) for (const d of sugg.filter((s) => s.group === "duplicates")) out.push({ kind: "duplicate", nodeId: d.nodeId, label: `${d.name} · duplicate` });
@@ -73,8 +131,31 @@
       return p.kind === "largest" ? t.largest : p.kind === "grew" ? t.grew : p.kind === "duplicate" ? t.duplicates : t.cloud;
     });
   });
+  // Terrain "Full view" button: shows once the camera leaves the full view.
+  let terrainEl: TerrainView | undefined = $state();
+  let fullView = $state(true);
+  let boxW = $state(0);
+  $effect(() => { if (view !== "terrain") fullView = true; });
+  function onKey(e: KeyboardEvent) {
+    if (e.key !== "Home" || view !== "terrain" || e.ctrlKey || e.metaKey || e.altKey) return;
+    const t = e.target as HTMLElement | null;
+    if (t?.closest?.("input, textarea, select, [contenteditable]")) return;
+    terrainEl?.resetView();
+    e.preventDefault();
+  }
   const PIN_BTNS: [PinKind, string, IconName][] = [["largest", "Largest", "flag"], ["grew", "Growers", "arrowUp"], ["duplicate", "Dupes", "twins"], ["cloud", "Cloud", "cloud"]];
 </script>
+
+<svelte:window onkeydown={onKey} />
+
+{#snippet liveTag()}
+  {#if live}
+    {#if live.running}<span class="badge cloud livetag"><i></i>Live</span>{:else}<span class="badge review">Partial</span>{/if}
+  {/if}
+{/snippet}
+{#snippet waitNote()}
+  {#if live}<div class="waitnote">{live.running ? "Updates when the scan finishes" : "From the last complete scan"}</div>{/if}
+{/snippet}
 
 {#if app.whatsNew}
   <section class="card whatsnew">
@@ -89,8 +170,26 @@
 <div class="grid ov">
   <div class="col">
     <section class="card">
-      <div class="card-head"><div class="ic"><Icon name="pie" size={18} /></div><h2>Where did my space go?</h2></div>
-      {#if space && vol}
+      <div class="card-head"><div class="ic"><Icon name="pie" size={18} /></div><h2>Where did my space go?</h2>{@render liveTag()}</div>
+      {#if live && vol}
+        <div class="stat-big">{(found / 1e9).toFixed(0)}<small>GB found <span class="faint">so far</span></small></div>
+        <div class="muted lead"><span class="mono">{app.fb(vol.freeBytes)}</span> free of {app.fb(vol.totalBytes)}</div>
+        <div class="bar big" role="img" aria-label="Space found so far by type">
+          {#each liveCats as [c, b] (c)}<span title={CATEGORY_LABEL[c]} style:width="{(b / vol.totalBytes) * 100}%" style:background="var({catVar(c)})"></span>{/each}
+          {#if notYet > 0}<span class="notyet" title="Not scanned yet" style:width="{(notYet / vol.totalBytes) * 100}%"></span>{/if}
+        </div>
+        <div class="list space-list">
+          {#each liveSys as s, i (i)}
+            <div class="row">
+              <span class="dot" style:background="var(--cat-system)"></span><span>{s.label}</span><span class="mono muted">{app.fb(s.bytes)}</span>
+              <span class="exp">{s.explanation}</span>
+            </div>
+          {/each}
+          {#if notYet > 0}
+            <div class="row"><span class="dot notyet"></span><span>Not scanned yet</span><span class="mono muted">{app.fb(notYet)}</span><span class="exp">{live.running ? "Used space the scan hasn't reached yet." : "The scan was stopped before it got here."}</span></div>
+          {/if}
+        </div>
+      {:else if space && vol}
         <div class="stat-big">{(used / 1e9).toFixed(0)}<small>GB used</small></div>
         <div class="muted lead"><span class="mono">{app.fb(vol.freeBytes)}</span> free of {app.fb(vol.totalBytes)} · every gigabyte accounted for below</div>
         <div class="bar big" role="img" aria-label="Used space by type">
@@ -122,6 +221,8 @@
         {#if diff}<span class="sub">vs {fmtWhen(diff.from.takenAt)}</span>{/if}
         <div class="tools"><button class="btn small" onclick={() => app.go("grew")}>What grew →</button></div>
       </div>
+      {@render waitNote()}
+      <div class:dim={!!live}>
       {#if diff}
         <div class="net"><div class="stat-big" class:up={diff.netDelta > 0} class:down={diff.netDelta < 0}>{app.fb(diff.netDelta, true)}</div><span class="muted">net change</span></div>
         <div class="hist">
@@ -140,6 +241,7 @@
       {:else}
         <p class="faint">Scan again later to see what changed.</p>
       {/if}
+      </div>
     </section>
 
     <section class="card">
@@ -184,9 +286,23 @@
   </div>
 
   <div class="col">
+    {#if view !== "terrain"}
     <section class="card terrain-card">
       <div class="card-head">
-        <div class="ic"><Icon name="route" size={18} /></div><h2>Terrain of {vol?.label}</h2><span class="sub accent">{flat ? "top-down map" : "3D view"}</span>
+        <div class="ic"><Icon name={VIEW_HEAD[view][1]} size={18} /></div><h2>{VIEW_HEAD[view][0]} of {vol?.label}</h2>{@render liveTag()}
+        <div class="tools">
+          <button class="icon-btn" title="Open in Explore" aria-label="Open in Explore" onclick={() => explore()}><Icon name="expand" /></button>
+        </div>
+      </div>
+      <div class="terrain-box viz-box">
+        {#if app.root || live}<MainViz live={app.live} rootId={app.root?.id ?? live?.rootId ?? 0} {view} onSelect={(id) => explore(id)} />{/if}
+      </div>
+      <div class="legend-row"><Legend /><span class="faint xs">Click to open in Explore</span></div>
+    </section>
+    {:else}
+    <section class="card terrain-card">
+      <div class="card-head">
+        <div class="ic"><Icon name="route" size={18} /></div><h2>Terrain of {vol?.label}</h2>{#if live}{@render liveTag()}{:else}<span class="sub accent">{flat ? "top-down map" : "3D view"}</span>{/if}
         <div class="tools">
           <div class="seg" role="group" aria-label="Pins">
             {#each PIN_BTNS as [k, l, ic] (k)}
@@ -195,17 +311,19 @@
           </div>
           <button class="icon-btn" class:active={under} title="Look under: cloud-only valleys" aria-label="Look under" onclick={() => { under = !under; if (under) flat = false; }}><Icon name="lake" /></button>
           <button class="icon-btn" class:active={flat} title="Top-down map" aria-label="Top-down map" onclick={() => { flat = !flat; if (flat) under = false; }}><Icon name="map" /></button>
-          <button class="icon-btn" title="Open in Explore" aria-label="Open in Explore" onclick={() => { app.exploreView = "terrain"; app.go("explore"); }}><Icon name="expand" /></button>
+          <button class="icon-btn" title="Open in Explore" aria-label="Open in Explore" onclick={() => explore()}><Icon name="expand" /></button>
         </div>
       </div>
-      <div class="terrain-box">
-        <TerrainView {tree} {pins} compact {flat} {under} onSelect={(id) => { app.exploreView = "terrain"; app.go("explore", id); }} onAutoFlat={() => (flat = true)} />
+      <div class="terrain-box" bind:clientWidth={boxW}>
+        <TerrainView bind:this={terrainEl} tree={terrainTree} {pins} compact {flat} {under} onSelect={(id) => explore(id)} onAutoFlat={() => (flat = true)} onFullViewChange={(f) => (fullView = f)} />
+        <FullViewButton show={!fullView} iconOnly={boxW > 0 && boxW < 360} onclick={() => terrainEl?.resetView()} />
       </div>
     </section>
+    {/if}
 
     <div class="grid lower">
       <section class="card">
-        <div class="card-head"><div class="ic"><Icon name="blocks" size={18} /></div><h2>By file type</h2><span class="sub">on disk</span></div>
+        <div class="card-head"><div class="ic"><Icon name="blocks" size={18} /></div><h2>By file type</h2>{#if live}{@render liveTag()}{:else}<span class="sub">on disk</span>{/if}</div>
         <div class="list">
           {#each byType as [c, v] (c)}
             <div class="row type-row">
@@ -221,7 +339,8 @@
           <div class="ic"><Icon name="spark" size={18} /></div><h2>Insights</h2><span class="sub">nothing is deleted from here</span>
           <div class="tools"><button class="btn small" onclick={() => app.go("cleanup")}>Review in Cleanup →</button></div>
         </div>
-        <div class="ins">
+        {@render waitNote()}
+        <div class="ins" class:dim={!!live}>
           {#each insights as [t, v, s, ic] (t)}
             <button class="tile" onclick={() => app.go("cleanup")}>
               <span class="muted tl"><Icon name={ic} />{t}</span>
@@ -266,6 +385,15 @@
   .legend { margin-top: 10px; }
   .sw2 { width: 12px; height: 8px; border-radius: 3px; display: inline-block; }
   .terrain-box { position: relative; height: 520px; border-radius: var(--r-md); overflow: hidden; }
+  .viz-box { display: flex; flex-direction: column; }
+  .dim { opacity: .5; }
+  .waitnote { font-size: var(--fs-xs); color: var(--text-3); margin: -8px 0 10px; }
+  .livetag { display: inline-flex; align-items: center; gap: 6px; }
+  .livetag i { width: 6px; height: 6px; border-radius: 50%; background: currentColor; animation: live-pulse 1.4s infinite; }
+  @keyframes live-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .3; } }
+  .notyet { background: repeating-linear-gradient(135deg, var(--stroke-strong) 0 3px, transparent 3px 7px); box-shadow: inset 0 0 0 1px var(--stroke-strong); }
+  .dot.notyet { background: repeating-linear-gradient(135deg, var(--stroke-strong) 0 2px, transparent 2px 4px); }
+  .legend-row { margin-top: 12px; display: flex; gap: 12px; justify-content: space-between; align-items: center; flex-wrap: wrap; }
   .lower { grid-template-columns: 1fr 1fr; }
   .type-row { grid-template-columns: 10px 110px 1fr 70px; }
   .type-row .bar { margin: 0; height: 6px; }

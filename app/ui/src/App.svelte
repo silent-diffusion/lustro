@@ -13,7 +13,7 @@
   import Grew from "./screens/Grew.svelte";
   import Cleanup from "./screens/Cleanup.svelte";
   import Settings from "./screens/Settings.svelte";
-  import Scan from "./screens/Scan.svelte";
+  import FirstRun from "./components/FirstRun.svelte";
 
   app.init();
 
@@ -46,18 +46,13 @@
   {:else}
     <main class="page">
       {#if app.route !== "settings"}<ContextBar />{/if}
-      {#if !app.root && app.route !== "settings" && app.route !== "scan"}
-        <section class="card empty">
-          <h2>No scan yet</h2>
-          <p class="muted">Scan {app.volume?.label ?? "a drive"} to see where your space went. Scanning only reads file details; nothing leaves this computer.</p>
-          <button class="btn primary" onclick={() => app.startScan()}>Scan {app.volume?.label}</button>
-        </section>
+      {#if !app.root && !app.live && app.route !== "settings"}
+        <FirstRun />
       {:else if app.route === "overview"}<Overview />
       {:else if app.route === "explore"}<Explore />
       {:else if app.route === "grew"}<Grew />
       {:else if app.route === "cleanup"}<Cleanup />
       {:else if app.route === "settings"}<Settings />
-      {:else if app.route === "scan"}<Scan />
       {/if}
     </main>
   {/if}
@@ -68,6 +63,4 @@
 
 <style>
   .loading .card { text-align: center; padding: 60px; }
-  .empty { text-align: center; padding: 60px 20px; display: grid; justify-items: center; gap: 8px; }
-  .empty h2 { margin: 0; }
 </style>

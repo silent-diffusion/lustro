@@ -46,19 +46,21 @@ Selecting in any pane updates the other two.
 
 ### 4. Cleanup
 Separate on purpose. It's a **review queue**: you decide on one suggestion at a time, and nothing runs until you apply.
-- **Queue bar:** one segment per suggestion, sized by space and colored by decision (coral remove, lime keep, amber outline later). Shows "n of N decided", running totals, and **Apply · free X GB**.
+- **Queue bar:** one segment per suggestion, sized by space and colored by decision (coral remove, lime keep, amber outline later). Long queues that don't fit switch to a compact progress bar (one equal slice per item, a marker on the current one). Shows "n of N decided", running totals, and **Apply · free X GB**.
 - **Group chips:** Duplicates · Dev caches · Temp files · Old downloads · Stale large files · **Free up space** (optional: returns downloaded cloud files to cloud-only; pinned files show a warning). Each filters the queue and shows how many are left.
 - **Where it lives** (left): the main view from Settings, with the current item pinned and its neighbourhood highlighted. It shows breadcrumbs and a line like "Inside X (size). Removing this frees N% of that folder." The view can be switched here too. Clicking another queued item on the map jumps to it.
-- **Decision card** (right): group and safety label, name, folder, size, why it's suggested, how it was found, and when it was last opened. Duplicates show which copy is kept and which is removed. Buttons: **Remove (R)**, **Keep (K)**, **Later (L)**, then previous/next and an **Up next** list.
+- **Decision card** (right): group and safety label, name, folder, size, why it's suggested, how it was found, and when it was last opened. Duplicates show which copy is kept and which is removed. Buttons: **Remove (R)**, **Keep (K)**, **Later (L)**, then previous/next.
+- **Up next** (own card under the decision card, same column): the next 8 undecided items with group icon, name and size; "+N more · Show all" expands the rest.
 - **Apply dialog:** lists every path. Destination: Recycle Bin (default: "Items go to the Recycle Bin. You can undo from History while they're still there."), move to another drive, or compress. Kept items stop being suggested (they can be managed in Settings). Drives without a Recycle Bin (network drives, some USB drives) refuse deletion: "This drive has no Recycle Bin, so Lustro won't delete from it. Use Move instead."
 - **Footer (collapsed):** protected paths with the reason for each, and History, a log of the last 100 cleanups. Undo for deleted items only works while they're still in the Recycle Bin, which the user or the system can empty at any time, so no time limit is promised.
 
-### Live scan (a state, not a tab)
-Pressing **Scan** opens the live scan view:
-- The folder tree **grows in real time**. New rows fade in and sizes count up. The busiest branch is highlighted.
-- A block map builds alongside it.
-- Counters: files, folders, bytes, elapsed time, scan mode (Standard or Fast scan; on Windows Fast scan needs admin, on macOS it benefits from Full Disk Access, on Linux it never needs root).
-- **Explore now** is available at any time. When the scan finishes, the app moves to Explore (or to What grew when there is a previous snapshot).
+### Live scan (a state, not a screen)
+Pressing **Scan** never changes the screen. The scan runs in place:
+- **Scan strip** in the context bar: pulse dot, what is being scanned, the scan mode (Standard or Fast scan; on Windows Fast scan needs admin, on macOS it benefits from Full Disk Access, on Linux it never needs root), live counters (files, found, elapsed), the current path, **Stop**, and a thin progress line. The Scan button reads "Scanning · 41%" and never cancels.
+- **Overview and Explore draw the tree as it grows.** Cards using scan data show a "Live" tag; "Where did my space go?" fills in with a hatched "Not scanned yet" remainder; Explore's folder tree grows in real time with the busiest branch highlighted.
+- Cards that need a finished scan (Since last scan, Insights, Cleanup suggestions, What grew) keep the previous results, dimmed, until it finishes.
+- When it finishes, the strip briefly shows the result ("Scan complete · +4.2 GB since Oct 21", **See what grew**, any folders that couldn't be read). A stopped scan is marked **Partial**.
+- First run: Overview shows a single "Scan {drive}" card, then fills in live.
 
 ### Settings (gear)
 - **Visualization:** main view for Explore and the Cleanup map (Block map / Ring chart / File tree / Terrain 3D), terrain options (category tint, pin types, cloud valleys, 2D fallback), how blocks are labeled.

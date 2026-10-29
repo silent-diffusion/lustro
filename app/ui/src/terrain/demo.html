@@ -10,6 +10,7 @@
       <strong>Terrain demo</strong>
       <span class="hint">Dev only, fake data. Drag to rotate, scroll to zoom, click to select.</span>
       <span class="spacer"></span>
+      <span class="stat" id="fullview">full view</span>
       <span class="stat" id="fps">– fps</span>
     </header>
     <div class="layout">
@@ -20,6 +21,8 @@
           <button id="flat" aria-pressed="false">2D flat map</button>
           <button id="under" aria-pressed="false">Look under</button>
           <button id="home">Fly home</button>
+          <button id="reset">Back to full view</button>
+          <label><input type="checkbox" id="spin" /> Auto-rotate</label>
         </fieldset>
         <fieldset>
           <legend>Options</legend>

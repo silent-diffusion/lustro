@@ -82,6 +82,7 @@ function mount(): void {
       readout.textContent = `Selected:\n${names.join(" › ")}`;
     },
     onHover: () => {},
+    onFullViewChange: (full) => { $("fullview").textContent = full ? "full view" : "zoomed / moved"; },
     onAutoFlat: () => {
       $("perf").hidden = false;
       opts.flat = true;
@@ -109,6 +110,8 @@ $("flat").onclick = () => { opts.flat = !opts.flat; handle.setFlat(opts.flat); s
 let under = false;
 $("under").onclick = () => { under = !under; handle.lookUnder(under); $("under").setAttribute("aria-pressed", String(under)); };
 $("home").onclick = () => handle.flyTo(tree.id);
+$("reset").onclick = () => handle.resetView();
+$<HTMLInputElement>("spin").onchange = (e) => handle.setOptions({ autoRotate: (e.target as HTMLInputElement).checked });
 $("try3d").onclick = () => { $("perf").hidden = true; opts.flat = false; handle.setFlat(false); syncButtons(); };
 
 const bind = (id: string, key: "categoryTint" | "cloudValleys" | "ringLabels" | "compact") => {
