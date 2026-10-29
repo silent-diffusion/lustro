@@ -124,12 +124,14 @@ jobs:
     permissions:
       contents: read
     steps:
-      # Only the two files this job runs and the lockfile that pins the CLI, from the tagged commit.
+      # Only the two files this job runs, the lockfile that pins the CLI and the config holding the
+      # updater public key, from the tagged commit.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           sparse-checkout-cone-mode: false
           sparse-checkout: |
+            app/src-tauri/tauri.conf.json
             app/ui/package-lock.json
             app/src-tauri/scripts/fetch-tauri-cli.mjs
             app/src-tauri/scripts/sign-installer.ps1
@@ -156,8 +158,8 @@ jobs:
           EXPECTED: ${{ needs.build.outputs.installer_sha256 }}
         run: echo "${EXPECTED}  signing/Lustro-Setup-${VERSION}.exe" | sha256sum --check --strict
 
-      # The only step with the key. Fails unless the version-bound .sig exists and the installer
-      # is unchanged.
+      # The only step with the key. Fails unless the version-bound .sig exists, was made by the key
+      # matching the committed updater public key, and the installer is unchanged.
       - name: Sign
         shell: pwsh
         env:
@@ -169,6 +171,7 @@ jobs:
           ./app/src-tauri/scripts/sign-installer.ps1
           -Installer "signing/Lustro-Setup-$env:VERSION.exe"
           -Version $env:VERSION
+          -PubKey $((Get-Content app/src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).plugins.updater.pubkey)
           -TauriJs $env:TAURI_JS
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
