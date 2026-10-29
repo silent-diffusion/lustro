@@ -113,5 +113,6 @@ A test manifest looks like:
 }
 ```
 
-With the placeholder key, a check finds the update and the install is refused with
+If the `.sig` was made with a key other than the one the app checks against (the release key, or
+`LUSTRO_DEV_UPDATE_PUBKEY`), a check finds the update and the install is refused with
 `{ state: "error", kind: "verify" }`, which is the expected result.
