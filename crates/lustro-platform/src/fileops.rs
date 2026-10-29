@@ -198,16 +198,57 @@ fn restore_from_trash(item: &UndoItem) -> io::Result<()> {
         trash::os_limited::list().map_err(|_| io::Error::other("couldn't read the trash"))?;
     // If several match, the one closest to our deletion time.
     let deleted_at = want.deleted_at;
-    let found = items
+    let (found, to) = items
         .into_iter()
-        .filter(|t| want.matches(t, bin_item_id))
-        .min_by_key(|t| deleted_at.map_or(-t.time_deleted, |d| (t.time_deleted - d).abs()))
+        .filter_map(|t| want.matching(&t, bin_item_id).map(|to| (t, to.to_owned())))
+        .min_by_key(|(t, _)| deleted_at.map_or(-t.time_deleted, |d| (t.time_deleted - d).abs()))
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "item is no longer in the trash"))?;
-    trash::os_limited::restore_all([found]).map_err(|e| match e {
-        trash::Error::RestoreCollision { .. } => io::Error::new(
-            io::ErrorKind::AlreadyExists,
-            "something with the same name is already in the original folder",
+    put_back(found, &to, want.file_id)
+}
+
+#[cfg(any(
+    windows,
+    all(
+        unix,
+        not(target_os = "macos"),
+        not(target_os = "ios"),
+        not(target_os = "android")
+    )
+))]
+fn collision() -> io::Error {
+    io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        "something with the same name is already in the original folder",
+    )
+}
+
+/// Windows: not through the `trash` crate, which restores to the bin's display name
+/// (`x.txt` comes back as `x` when Explorer hides known extensions) and lets the shell
+/// replace whatever is at that name. Instead the item is moved back to exactly the path
+/// we recorded, and the move itself refuses to replace anything.
+#[cfg(windows)]
+fn put_back(found: trash::TrashItem, to: &Path, id: Option<FileId>) -> io::Result<()> {
+    crate::recycle::unrecycle(Path::new(&found.id), to, id).map_err(|e| match e.kind() {
+        io::ErrorKind::AlreadyExists => collision(),
+        io::ErrorKind::NotFound => io::Error::new(
+            io::ErrorKind::NotFound,
+            "the original folder no longer exists",
         ),
+        _ => io::Error::other("couldn't restore the item"),
+    })
+}
+
+/// freedesktop: the `.trashinfo` holds the real name, and the crate reserves the
+/// destination (`create_new`) before moving, so nothing is replaced.
+#[cfg(all(
+    unix,
+    not(target_os = "macos"),
+    not(target_os = "ios"),
+    not(target_os = "android")
+))]
+fn put_back(found: trash::TrashItem, _to: &Path, _id: Option<FileId>) -> io::Result<()> {
+    trash::os_limited::restore_all([found]).map_err(|e| match e {
+        trash::Error::RestoreCollision { .. } => collision(),
         _ => io::Error::other("couldn't restore the item"),
     })
 }
@@ -224,10 +265,12 @@ fn restore_from_trash(item: &UndoItem) -> io::Result<()> {
 ))]
 struct Wanted {
     deleted_at: Option<i64>,
-    /// Case-folded where the OS is case-insensitive.
-    paths: Vec<String>,
+    /// Where the item was, as recorded (the first one is where it goes back).
+    paths: Vec<PathBuf>,
     file_id: Option<FileId>,
     ci: bool,
+    /// The token didn't parse: nothing matches.
+    malformed: bool,
 }
 
 #[cfg(any(
@@ -241,7 +284,6 @@ struct Wanted {
 ))]
 impl Wanted {
     fn from(item: &UndoItem) -> Self {
-        use lustro_cloud::paths;
         let ci = lustro_cloud::rules::Os::current().case_insensitive();
         // Older tokens are just the time; newer ones also carry the final path, and on
         // Windows the file id after the time.
@@ -251,33 +293,36 @@ impl Wanted {
                 .map_or((Some(t), None), |(a, b)| (Some(a), Some(b))),
             None => (None, None),
         };
-        let mut head = head.unwrap_or("").split(':');
-        let deleted_at = head.next().and_then(|t| t.parse().ok());
-        let file_id = match (head.next(), head.next()) {
-            (Some(v), Some(i)) => v
+        // A token that's there but doesn't parse matches nothing, rather than dropping
+        // the time window or the file-id check.
+        let parts: Vec<&str> = head.map_or(Vec::new(), |h| h.split(':').collect());
+        let deleted_at = parts.first().and_then(|t| t.parse().ok());
+        let file_id = match parts[..] {
+            [_, v, i] => v
                 .parse()
                 .ok()
                 .zip(i.parse().ok())
                 .map(|(volume, index)| FileId { volume, index }),
             _ => None,
         };
+        let malformed = head.is_some()
+            && (deleted_at.is_none() || !matches!((parts.len(), file_id), (1, _) | (3, Some(_))));
         // A newer token names exactly the path that was trashed; only that matches. For an
         // older time-only token: the path as given, or with its folder made long and final.
         let paths = match trashed_from {
             Some(p) => vec![PathBuf::from(p)],
-            None => std::iter::once(item.original.clone())
-                .chain(long_form(&item.original))
+            // Long form first: it's where the item goes back to.
+            None => long_form(&item.original)
+                .into_iter()
+                .chain(std::iter::once(item.original.clone()))
                 .collect(),
         };
-        let paths = paths
-            .iter()
-            .map(|p| paths::key(&p.to_string_lossy(), ci))
-            .collect();
         Wanted {
             deleted_at,
             paths,
             file_id,
             ci,
+            malformed,
         }
     }
 
@@ -290,17 +335,30 @@ impl Wanted {
     ///   extension when Explorer hides known ones (the default), so the name also counts
     ///   with the extension of the item in the bin (`$R….txt` keeps the real one);
     /// - with a file id in the token (Windows): the item in the bin is that very file.
+    #[cfg(test)]
     fn matches(
         &self,
         t: &trash::TrashItem,
         id_of: impl Fn(&trash::TrashItem) -> Option<FileId>,
     ) -> bool {
+        self.matching(t, id_of).is_some()
+    }
+
+    /// Like `matches`, returning the recorded path the item goes back to.
+    fn matching(
+        &self,
+        t: &trash::TrashItem,
+        id_of: impl Fn(&trash::TrashItem) -> Option<FileId>,
+    ) -> Option<&Path> {
         use lustro_cloud::paths;
+        if self.malformed {
+            return None;
+        }
         if self
             .deleted_at
             .is_some_and(|d| (t.time_deleted - d).abs() > RESTORE_WINDOW_SECS)
         {
-            return false;
+            return None;
         }
         let key = |p: &Path| paths::key(&p.to_string_lossy(), self.ci);
         let folder = key(&t.original_parent);
@@ -314,8 +372,7 @@ impl Wanted {
                 names.push(key(Path::new(&full)));
             }
         }
-        let ours = self.paths.iter().any(|w| {
-            let w = Path::new(w);
+        let ours = self.paths.iter().find(|w| {
             let (Some(want_folder), Some(want_name)) = (w.parent().map(key), w.file_name()) else {
                 return false;
             };
@@ -330,7 +387,10 @@ impl Wanted {
                         .as_ref()
                         == Some(&want_folder))
         });
-        ours && self.file_id.is_none_or(|id| id_of(t) == Some(id))
+        let ours = ours?;
+        self.file_id
+            .is_none_or(|id| id_of(t) == Some(id))
+            .then_some(ours.as_path())
     }
 }
 
@@ -769,6 +829,208 @@ mod tests {
             restore_or_explain(&ops(None), &item);
         }
         assert!(f.exists());
+    }
+
+    /// Regression (CI, windows-latest): undo restored `x.txt` as `x` when Explorer hid
+    /// extensions. Each item must come back under exactly its own name, with its contents,
+    /// and nothing under a shortened name.
+    #[test]
+    fn restore_keeps_the_exact_name() {
+        if !CAN_RESTORE {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let base = long(dir.path());
+        for name in ["x.txt", "a.tar.gz", "noext", "Mixed.Case.JPG"] {
+            let (f, item) = trashed_temp(&base, name);
+            assert!(!f.exists(), "{name}");
+            restore_or_explain(&ops(None), &item);
+            assert_eq!(std::fs::read(&f).unwrap(), b"window", "{name}");
+            let listed: Vec<_> = std::fs::read_dir(&base)
+                .unwrap()
+                .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+                .collect();
+            assert_eq!(listed, [name], "only the exact name is there");
+            std::fs::remove_file(&f).unwrap();
+        }
+    }
+
+    /// Undo never replaces something that has since appeared at the original path: it
+    /// fails, the newcomer is untouched, and the item stays in the bin.
+    #[test]
+    fn restore_never_replaces_a_newer_item() {
+        if !CAN_RESTORE {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let (f, item) = trashed_temp(&long(dir.path()), "lustro-collision-test.txt");
+        std::fs::write(&f, b"newer").unwrap();
+        assert_eq!(
+            ops(None).restore(&item).unwrap_err().kind(),
+            io::ErrorKind::AlreadyExists
+        );
+        assert_eq!(std::fs::read(&f).unwrap(), b"newer");
+        // Still in the bin: once the newcomer is gone, undo works.
+        std::fs::remove_file(&f).unwrap();
+        restore_or_explain(&ops(None), &item);
+        assert_eq!(std::fs::read(&f).unwrap(), b"window");
+    }
+
+    /// `unrecycle` only moves `$R…` items out of a `$Recycle.Bin` folder, only the file
+    /// it expects, and never over something already there.
+    #[cfg(windows)]
+    #[test]
+    fn unrecycle_only_takes_the_expected_item_from_a_bin() {
+        use crate::recycle::unrecycle;
+        let dir = tempfile::tempdir().unwrap();
+        let base = long(dir.path());
+        let fake_bin = base.join("$Recycle.Bin").join("S-1-5-21-1");
+        std::fs::create_dir_all(&fake_bin).unwrap();
+        let plain = base.join("$Rplain.txt");
+        let not_r = fake_bin.join("$Iabc.txt");
+        std::fs::write(&plain, b"p").unwrap();
+        std::fs::write(&not_r, b"i").unwrap();
+        let to = base.join("dest.txt");
+        for from in [&plain, &not_r] {
+            assert_eq!(
+                unrecycle(from, &to, None).unwrap_err().kind(),
+                io::ErrorKind::InvalidInput
+            );
+            assert!(from.exists());
+        }
+        let r = fake_bin.join("$Rabc.txt");
+        std::fs::write(&r, b"r").unwrap();
+        let id = stat_identity(&r).unwrap().unwrap().file_id;
+        // Another file's id: refused, left in the bin.
+        let other = stat_identity(&plain).unwrap().unwrap().file_id;
+        assert!(unrecycle(&r, &to, other).is_err());
+        assert!(r.exists() && !to.exists());
+        // Something already at the destination: refused, untouched.
+        std::fs::write(&to, b"taken").unwrap();
+        assert_eq!(
+            unrecycle(&r, &to, id).unwrap_err().kind(),
+            io::ErrorKind::AlreadyExists
+        );
+        assert_eq!(std::fs::read(&to).unwrap(), b"taken");
+        std::fs::remove_file(&to).unwrap();
+        // Destinations Win32 would rewrite or resolve elsewhere: refused.
+        for bad in [
+            base.join("dest.txt."),
+            base.join("dest.txt "),
+            base.join("sub").join("..").join("dest.txt"),
+            PathBuf::from("dest.txt"),
+        ] {
+            assert_eq!(
+                unrecycle(&r, &bad, id).unwrap_err().kind(),
+                io::ErrorKind::InvalidInput,
+                "{}",
+                bad.file_name()
+                    .map(|n| n.to_string_lossy())
+                    .unwrap_or_default()
+            );
+        }
+        // The expected item goes back, and its `$I` record goes with it.
+        unrecycle(&r, &to, id).unwrap();
+        assert_eq!(std::fs::read(&to).unwrap(), b"r");
+        assert!(!r.exists() && !not_r.exists());
+    }
+
+    /// If a folder on the way to the original path has become a junction since (here the
+    /// original folder itself, pointing somewhere else), restore refuses instead of
+    /// following it.
+    #[cfg(windows)]
+    #[test]
+    fn unrecycle_refuses_a_destination_behind_a_junction() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = long(dir.path());
+        let fake_bin = base.join("$Recycle.Bin").join("S-1-5-21-1");
+        std::fs::create_dir_all(&fake_bin).unwrap();
+        let r = fake_bin.join("$Rjct.txt");
+        std::fs::write(&r, b"r").unwrap();
+        let id = stat_identity(&r).unwrap().unwrap().file_id;
+        let elsewhere = base.join("elsewhere");
+        std::fs::create_dir(&elsewhere).unwrap();
+        let original = base.join("original");
+        let ok = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(&original)
+            .arg(&elsewhere)
+            .output()
+            .unwrap()
+            .status
+            .success();
+        assert!(ok, "mklink /J failed");
+        let to = original.join("x.txt");
+        assert_eq!(
+            crate::recycle::unrecycle(&r, &to, id).unwrap_err().kind(),
+            io::ErrorKind::InvalidInput
+        );
+        assert!(r.exists());
+        assert_eq!(std::fs::read_dir(&elsewhere).unwrap().count(), 0);
+        // A junction higher up in the chain is refused the same way.
+        let deeper = elsewhere.join("deeper");
+        std::fs::create_dir(&deeper).unwrap();
+        assert_eq!(
+            crate::recycle::unrecycle(&r, &original.join("deeper").join("x.txt"), id)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidInput
+        );
+        assert!(r.exists());
+        assert_eq!(std::fs::read_dir(&deeper).unwrap().count(), 0);
+    }
+
+    /// A token that's there but doesn't parse matches nothing: a bad time doesn't drop
+    /// the time window, and a bad id doesn't drop the file-id check.
+    #[cfg(any(windows, all(unix, not(target_os = "macos"))))]
+    #[test]
+    fn malformed_tokens_match_nothing() {
+        let original = PathBuf::from(if cfg!(windows) {
+            r"C:\Users\William\x.txt"
+        } else {
+            "/home/william/x.txt"
+        });
+        let undo = |token: &str| UndoItem {
+            original: original.clone(),
+            location: None,
+            token: Some(token.to_owned()),
+            bytes: 1,
+            action: Action::Trash,
+            undoable: true,
+            restored: false,
+        };
+        let listed = trash::TrashItem {
+            id: original.as_os_str().to_owned(),
+            name: "x.txt".into(),
+            original_parent: original.parent().unwrap().to_owned(),
+            time_deleted: 1000,
+        };
+        let p = original.display();
+        let any_id = |_: &trash::TrashItem| {
+            Some(FileId {
+                volume: 1,
+                index: 2,
+            })
+        };
+        // Well-formed: matches.
+        assert!(Wanted::from(&undo(&format!("1000 {p}"))).matches(&listed, any_id));
+        assert!(Wanted::from(&undo(&format!("1000:1:2 {p}"))).matches(&listed, any_id));
+        assert!(Wanted::from(&undo("1000")).matches(&listed, any_id));
+        for bad in [
+            format!("soon {p}"),
+            format!(" {p}"),
+            format!("1000:1 {p}"),
+            format!("1000:x:2 {p}"),
+            format!("1000:1:2:3 {p}"),
+            format!("1000:: {p}"),
+            "soon".to_owned(),
+            String::new(),
+        ] {
+            assert!(
+                !Wanted::from(&undo(&bad)).matches(&listed, any_id),
+                "{bad:?}"
+            );
+        }
     }
 
     /// Regression (CI, windows-latest): the bin lists display names, so with Explorer

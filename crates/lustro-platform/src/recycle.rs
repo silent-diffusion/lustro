@@ -78,7 +78,7 @@ fn is_unsafe_name(name: &str) -> bool {
 }
 
 #[cfg(windows)]
-pub(crate) use win::{check_volume, identity, open_item, recycle};
+pub(crate) use win::{check_volume, identity, open_item, recycle, unrecycle};
 
 /// FILETIME (100 ns since 1601) to Unix seconds, exactly as the scanner converts it.
 pub(crate) fn filetime_to_unix(ft: i64) -> Option<i64> {
@@ -101,18 +101,22 @@ mod win {
     use lustro_core::dto::ItemIdentity;
     use lustro_core::model::{FileId, NodeKind};
     use std::os::windows::ffi::OsStrExt;
-    use std::path::PathBuf;
+    use std::path::{Component, PathBuf};
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
     use windows::core::{implement, Ref, HRESULT, PCWSTR};
-    use windows::Win32::Foundation::{CloseHandle, E_ABORT, HANDLE, RPC_E_CHANGED_MODE};
+    use windows::Win32::Foundation::{
+        CloseHandle, ERROR_ALREADY_EXISTS, ERROR_FILE_EXISTS, E_ABORT, HANDLE, RPC_E_CHANGED_MODE,
+    };
     use windows::Win32::Storage::FileSystem::{
-        CreateFileW, FileAttributeTagInfo, FileIdInfo, GetDriveTypeW, GetFileInformationByHandle,
-        GetFileInformationByHandleEx, GetFinalPathNameByHandleW, BY_HANDLE_FILE_INFORMATION,
+        CreateFileW, FileAttributeTagInfo, FileIdInfo, FileRenameInfo, FileRenameInfoEx,
+        GetDriveTypeW, GetFileInformationByHandle, GetFileInformationByHandleEx,
+        GetFinalPathNameByHandleW, SetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION, DELETE,
         FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT, FILE_ATTRIBUTE_TAG_INFO,
         FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_ID_INFO,
-        FILE_NAME_NORMALIZED, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
-        GETFINALPATHNAMEBYHANDLE_FLAGS, OPEN_EXISTING, VOLUME_NAME_DOS, VOLUME_NAME_GUID,
+        FILE_LIST_DIRECTORY, FILE_NAME_NORMALIZED, FILE_READ_ATTRIBUTES, FILE_RENAME_INFO,
+        FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, GETFINALPATHNAMEBYHANDLE_FLAGS,
+        OPEN_EXISTING, VOLUME_NAME_DOS, VOLUME_NAME_GUID,
     };
     use windows::Win32::System::Com::{
         CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_ALL, COINIT_APARTMENTTHREADED,
@@ -580,6 +584,179 @@ mod win {
         }
     }
 
+    /// Moves an item out of the Recycle Bin (`…\$Recycle.Bin\<sid>\$R…`) back to `to`,
+    /// then removes its `$I…` record.
+    /// - `to` must be a plain absolute drive path: no `.`/`..`, no name Win32 would
+    ///   rewrite.
+    /// - Its folder is opened with links followed, and its final path must be exactly
+    ///   that folder, so a folder in the chain that has since become a junction is refused.
+    ///   It is opened without FILE_SHARE_DELETE (with list access, since share modes
+    ///   only bind handles with data access; nothing is enumerated) and held until the
+    ///   move is done, so neither it nor any folder above it can be renamed, deleted or
+    ///   swapped for a junction in between.
+    /// - The bin item is opened as itself, and its file id is compared on that handle.
+    /// - That handle is renamed. It never replaces anything (FileRenameInfoEx flags 0,
+    ///   else FileRenameInfo with ReplaceIfExists false). It is a same-volume rename,
+    ///   never a copy. The folder isn't recreated.
+    pub(crate) fn unrecycle(
+        in_bin: &Path,
+        to: &Path,
+        expected: Option<FileId>,
+    ) -> std::io::Result<()> {
+        use std::io::{Error, ErrorKind};
+        let invalid = || Error::from(ErrorKind::InvalidInput);
+        let name = in_bin.file_name().ok_or_else(invalid)?.to_string_lossy();
+        let in_a_bin = in_bin
+            .components()
+            .any(|c| c.as_os_str().eq_ignore_ascii_case("$Recycle.Bin"));
+        let rest = name
+            .get(..2)
+            .filter(|p| p.eq_ignore_ascii_case("$R"))
+            .map(|_| &name[2..]);
+        let (true, Some(rest)) = (in_a_bin, rest) else {
+            return Err(invalid());
+        };
+        let record = in_bin.with_file_name(format!("$I{rest}"));
+
+        let plain = to.is_absolute()
+            && super::is_drive_letter_path(to)
+            && !to
+                .components()
+                .any(|c| matches!(c, Component::CurDir | Component::ParentDir))
+            && !super::has_unsafe_windows_name(to);
+        let (true, Some(folder)) = (plain, to.parent().filter(|_| to.file_name().is_some())) else {
+            return Err(invalid());
+        };
+        let pinned = open_with(
+            folder,
+            (FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES).0,
+            true,
+            false,
+        )?;
+        let key = |p: &str| lustro_cloud::paths::key(p, true);
+        let real = final_path(&pinned, VOLUME_NAME_DOS).ok_or_else(invalid)?;
+        if key(&real) != key(&folder.to_string_lossy()) {
+            return Err(invalid());
+        }
+
+        let item = open_with(in_bin, (DELETE | FILE_READ_ATTRIBUTES).0, false, true)?;
+        if expected.is_some_and(|id| identity_of(&item).ok().and_then(|i| i.file_id) != Some(id)) {
+            return Err(Error::other("not the item that was trashed"));
+        }
+        // The rename API takes a full path here (a name relative to a folder handle is
+        // rejected); with the folder pinned it can only resolve to the checked folder.
+        let target = Path::new(r"\\?\").join(shell_name(to));
+        rename(&item, target.as_os_str())?;
+        drop(item);
+        drop(pinned);
+        // Best effort: without it the bin shows a stale entry, but the item is back.
+        let _ = std::fs::remove_file(record);
+        Ok(())
+    }
+
+    /// The folder pin `unrecycle` takes, for the test that it holds.
+    #[cfg(test)]
+    pub(super) fn pin_for_test(folder: &Path) -> std::io::Result<impl Drop> {
+        open_with(
+            folder,
+            (FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES).0,
+            true,
+            false,
+        )
+    }
+
+    /// Opens `path` with `access`. Links are followed only if `follow`; other openers
+    /// may rename or delete it only if `share_delete`.
+    #[allow(unsafe_code)]
+    fn open_with(
+        path: &Path,
+        access: u32,
+        follow: bool,
+        share_delete: bool,
+    ) -> std::io::Result<Handle> {
+        let w = wide(path);
+        let flags = if follow {
+            FILE_FLAG_BACKUP_SEMANTICS
+        } else {
+            FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT
+        };
+        let share = if share_delete {
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE
+        } else {
+            FILE_SHARE_READ | FILE_SHARE_WRITE
+        };
+        // SAFETY: `w` is NUL-terminated and outlives the call; the handle is owned by
+        // `Handle` and closed on drop.
+        let h = unsafe {
+            CreateFileW(
+                PCWSTR(w.as_ptr()),
+                access,
+                share,
+                None,
+                OPEN_EXISTING,
+                flags,
+                None,
+            )
+        }
+        .map_err(win_io)?;
+        Ok(Handle(h))
+    }
+
+    /// Renames the item open as `item` to the full path `to`, never replacing anything.
+    #[allow(unsafe_code)]
+    fn rename(item: &Handle, to: &std::ffi::OsStr) -> std::io::Result<()> {
+        const ERROR_INVALID_FUNCTION: u32 = 1;
+        const ERROR_NOT_SUPPORTED: u32 = 50;
+        const ERROR_INVALID_PARAMETER: u32 = 87;
+        let name: Vec<u16> = to.encode_wide().collect();
+        let bytes = name.len() * 2;
+        // The struct plus the name, as Rust's std passes it; that leaves room for a NUL.
+        let size = std::mem::size_of::<FILE_RENAME_INFO>() + bytes;
+        // Zeroed, so ReplaceIfExists / Flags are 0; u64 storage keeps it 8-aligned.
+        let mut buf = vec![0u64; size.div_ceil(8)];
+        let info = buf.as_mut_ptr().cast::<FILE_RENAME_INFO>();
+        // SAFETY: `buf` is aligned and large enough for the header and the name; the name
+        // is copied within those bounds.
+        unsafe {
+            (*info).FileNameLength = bytes as u32;
+            std::ptr::copy_nonoverlapping(
+                name.as_ptr(),
+                std::ptr::addr_of_mut!((*info).FileName).cast::<u16>(),
+                name.len(),
+            );
+        }
+        let code = |e: &windows::core::Error| (e.code().0 as u32) & 0xFFFF;
+        for class in [FileRenameInfoEx, FileRenameInfo] {
+            // SAFETY: valid handle (kept open by the caller); `info` points to `size`
+            // initialized bytes of a FILE_RENAME_INFO.
+            let done = unsafe {
+                SetFileInformationByHandle(
+                    item.0,
+                    class,
+                    info as *const core::ffi::c_void,
+                    size as u32,
+                )
+            };
+            match done {
+                Ok(()) => return Ok(()),
+                // FileRenameInfoEx is Windows 10 1709+.
+                Err(e)
+                    if class == FileRenameInfoEx
+                        && [
+                            ERROR_INVALID_FUNCTION,
+                            ERROR_NOT_SUPPORTED,
+                            ERROR_INVALID_PARAMETER,
+                        ]
+                        .contains(&code(&e)) => {}
+                Err(e) if [ERROR_ALREADY_EXISTS.0, ERROR_FILE_EXISTS.0].contains(&code(&e)) => {
+                    return Err(std::io::ErrorKind::AlreadyExists.into())
+                }
+                Err(e) => return Err(win_io(e)),
+            }
+        }
+        Err(std::io::ErrorKind::Unsupported.into())
+    }
+
     /// The shell doesn't parse `\\?\C:\…`; turn it back into `C:\…`.
     fn shell_name(path: &Path) -> std::ffi::OsString {
         let s = path.as_os_str().to_string_lossy();
@@ -684,6 +861,24 @@ mod tests {
         // ReFS: the high half changes the result, the same way as `lo ^ hi.rotate_left(32)`.
         id[8..].copy_from_slice(&0x0000_0000_0000_0007u64.to_le_bytes());
         assert_eq!(fold_file_id(id), 0x0005_0000_0001_2345 ^ (7u64 << 32));
+    }
+
+    /// What `unrecycle` relies on: while the destination folder is held without
+    /// FILE_SHARE_DELETE, neither it nor a folder above it can be renamed away (so
+    /// nothing can be swapped in at that path); released, they can.
+    #[cfg(windows)]
+    #[test]
+    fn a_pinned_folder_and_its_parents_cannot_be_moved() {
+        let dir = tempfile::tempdir().unwrap();
+        let top = dir.path().join("top");
+        let folder = top.join("folder");
+        std::fs::create_dir_all(&folder).unwrap();
+        let pinned = win::pin_for_test(&folder).unwrap();
+        assert!(std::fs::rename(&folder, top.join("moved")).is_err());
+        assert!(std::fs::rename(&top, dir.path().join("moved")).is_err());
+        assert!(folder.exists());
+        drop(pinned);
+        std::fs::rename(&top, dir.path().join("moved")).unwrap();
     }
 
     #[cfg(windows)]
