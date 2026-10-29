@@ -9,6 +9,7 @@ import type { Layout, LayoutNode } from "./layout";
 import { contourLevels, marchingSquares } from "./contours";
 import type { Palette, RGB } from "./palette";
 import { css, shade } from "./palette";
+import { VIEW_MS, viewProgress } from "./rotation";
 
 /** Half-width of the drawn world (disc radius 1, base ring to 1.2). */
 const R = 1.25;
@@ -34,10 +35,13 @@ export class Flat2D {
   private h = 1;
   private dpr = 1;
   private view: FlatView = { zoom: 1, cx: 0, cy: 0 };
+  /** Target of the current view change; `anim` holds where it started and when. */
   private goal: FlatView | null = null;
+  private anim: { from: FlatView; start: number; ms: number } | null = null;
   private dirty = true;
   private drag: { x: number; y: number; moved: boolean } | null = null;
-  ease = 0.18;
+  /** Duration of view changes, ms (0 = instant, for reduced motion). */
+  duration = VIEW_MS;
 
   constructor(
     container: HTMLElement,
@@ -107,10 +111,22 @@ export class Flat2D {
     const size = Math.max(Math.max(...pts.map((p) => p[0])) - Math.min(...pts.map((p) => p[0])),
       Math.max(...pts.map((p) => p[1])) - Math.min(...pts.map((p) => p[1])), 0.01);
     const [cx, cy] = toDisc((n.x0 + n.x1) / 2, (n.y0 + n.y1) / 2);
-    this.goal = this.clampView({ zoom: Math.max(1, Math.min(4, 1.04 / size)), cx, cy });
+    this.goTo(this.clampView({ zoom: Math.max(1, Math.min(4, 1.04 / size)), cx, cy }));
   }
 
-  home(): void { this.goal = { zoom: 1, cx: 0, cy: 0 }; }
+  home(): void { this.goTo({ zoom: 1, cx: 0, cy: 0 }); }
+
+  private goTo(v: FlatView, ms = this.duration): void {
+    this.goal = v;
+    this.anim = { from: { ...this.view }, start: performance.now(), ms };
+    this.dirty = true;
+  }
+
+  /** Whole map in view and not moving. */
+  isHome(): boolean {
+    const v = this.view;
+    return !this.goal && v.zoom < 1.02 && Math.hypot(v.cx, v.cy) < 0.01;
+  }
 
   private clampView(v: FlatView): FlatView {
     const r = Math.hypot(v.cx, v.cy), lim = 1;
@@ -120,10 +136,11 @@ export class Flat2D {
 
   /** Advances view animation and redraws if needed. Returns whether it drew. */
   update(): boolean {
-    if (this.goal) {
-      const v = this.view, g = this.goal, e = this.ease;
-      v.zoom += (g.zoom - v.zoom) * e; v.cx += (g.cx - v.cx) * e; v.cy += (g.cy - v.cy) * e;
-      if (Math.abs(g.zoom - v.zoom) < 0.002 && Math.hypot(g.cx - v.cx, g.cy - v.cy) < 0.0005) { this.view = { ...g }; this.goal = null; }
+    if (this.goal && this.anim) {
+      const g = this.goal, f = this.anim.from, p = viewProgress(this.anim.start, performance.now(), this.anim.ms);
+      // Zoom eases geometrically, so zooming in and out feel the same speed.
+      this.view = { zoom: f.zoom * Math.pow(g.zoom / f.zoom, p), cx: f.cx + (g.cx - f.cx) * p, cy: f.cy + (g.cy - f.cy) * p };
+      if (p >= 1) { this.view = { ...g }; this.goal = null; this.anim = null; }
       this.dirty = true;
     }
     if (!this.dirty || !this.hm || !this.palette) return false;
@@ -322,7 +339,7 @@ export class Flat2D {
       default: return;
     }
     ev.preventDefault();
-    this.goal = this.clampView(next);
+    this.goTo(this.clampView(next), Math.min(this.duration, 150));
   };
 
   dispose(): void {

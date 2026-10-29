@@ -91,10 +91,13 @@
       for (let i = start; i < path.length - 1; i++) {
         open.add(path[i]);
         await load(path[i]);
-        for (let page = 0; page < 10 && !cache.get(path[i])!.items.some((n) => n.id === path[i + 1]) && cache.get(path[i])!.items.length < cache.get(path[i])!.total; page++) {
+        for (let page = 0; page < 10; page++) {
+          // The cache is reset when the data changes (a scan finished); stop if this folder is gone.
+          const c = cache.get(path[i]);
+          if (cancelled || !c || c.items.some((n) => n.id === path[i + 1]) || c.items.length >= c.total) break;
           await load(path[i], true);
         }
-        if (cancelled) return;
+        if (cancelled || !cache.has(path[i])) return;
       }
       tick++;
       await Promise.resolve();

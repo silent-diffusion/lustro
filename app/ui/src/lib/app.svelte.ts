@@ -1,17 +1,17 @@
 // App-wide state (Svelte 5 runes). Screens read from `app` and call `app.backend`.
 
 import type {
-  Category, CloudInfo, CloudProviderSummary, Decision, MainView, UpdateStatus, NodeDto, NodeId, Platform, ScanDone, ScanProgress, ScanUpdate, Settings, VolumeInfo,
+  Category, CloudProviderSummary, Decision, MainView, UpdateStatus, NodeDto, NodeId, Platform, ScanDone, ScanProgress, ScanUpdate, Settings, TreeDto, VolumeInfo,
 } from "../ipc/types";
 import { DEFAULT_SETTINGS } from "../ipc/defaults";
 import type { Backend } from "../ipc/backend";
 import { createBackend, readDevOptions, type DevOptions } from "./backend";
 import { fmtBytes } from "./format";
 import { catVar, wording, kbd, type Wording } from "./labels";
-import type { VizNode } from "./viz";
+import { size, type VizNode } from "./viz";
 
-export type Route = "overview" | "explore" | "grew" | "cleanup" | "settings" | "scan";
-const ROUTES: Route[] = ["overview", "explore", "grew", "cleanup", "settings", "scan"];
+export type Route = "overview" | "explore" | "grew" | "cleanup" | "settings";
+const ROUTES: Route[] = ["overview", "explore", "grew", "cleanup", "settings"];
 
 export type Tip =
   | { kind: "node"; node: VizNode; path?: string; x: number; y: number; extra?: string }
@@ -42,22 +42,34 @@ function readPalette(): Palette {
 
 // ---- Live scan mirror ----
 
-export interface LiveNode {
-  id: NodeId;
-  parent: NodeId | null;
-  name: string;
-  kind: NodeDto["kind"];
-  allocated: number;
-  cloudOnly: number;
-  category: Category;
-  cloud: CloudInfo | null;
-  depth: number;
-  /** Update number when it first appeared (for the fade-in). */
-  born: number;
+/** A node as the running scan reported it, plus when it first appeared and was last updated (update numbers). */
+export type LiveNode = NodeDto & { depth: number; born: number; seen: number };
+
+/** What Explore's search can filter the live mirror by. */
+export interface LiveFilter {
+  text?: string;
+  categories?: string[];
+  minBytes?: number;
+  olderThanDays?: number;
 }
 
-/** Client-side mirror of a running scan, built from ScanUpdates. Big maps are deliberately not reactive;
- *  `tick` is bumped once per update so views re-render about 10 times a second. */
+/** Runs `fn` now, then again every `minMs` or slower: the pause grows with how long `fn` took, so redrawing
+ *  from a big scan mirror stays under about 1/8 of the main thread. Returns a stop function. */
+export function liveLoop(fn: () => void, minMs: number): () => void {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let stopped = false;
+  const run = () => {
+    const t0 = performance.now();
+    fn();
+    if (!stopped) timer = setTimeout(run, Math.max(minMs, (performance.now() - t0) * 8));
+  };
+  timer = setTimeout(run, minMs);
+  return () => { stopped = true; clearTimeout(timer); };
+}
+
+/** Client-side mirror of a scan, built from ScanUpdates. Overview and Explore draw from it while the scan runs,
+ *  and after a stopped scan (the partial tree stays until the next scan). Big maps are deliberately not reactive;
+ *  `tick` is bumped once per update (about 10 times a second), and views throttle their own redraws. */
 export class LiveScan {
   id: string;
   root: string;
@@ -66,16 +78,30 @@ export class LiveScan {
   kids = new Map<NodeId, NodeId[]>();
   open = new Set<NodeId>();
   rootId: NodeId | null = null;
+  /** Biggest file seen so far (the terrain's only pin while scanning). */
+  largestFile: NodeId | null = null;
+  /** Names near the top of the tree, so Overview can show system rows (pagefile.sys…) once they're reached. */
+  topNames = new Set<string>();
   tick = $state(0);
   progress = $state<ScanProgress>({ files: 0, dirs: 0, allocatedBytes: 0, elapsedMs: 0 });
   busiest = $state<NodeId | null>(null);
   done = $state<ScanDone | null>(null);
   private dirty = new Set<NodeId>();
+  private lastSort = 0;
 
   constructor(id: string, root: string, mode: Settings["scanMode"]) {
     this.id = id;
     this.root = root;
     this.mode = mode;
+  }
+
+  get running(): boolean {
+    return !this.done;
+  }
+
+  /** Stopped before the end: what's on screen is partial. */
+  get partial(): boolean {
+    return !!this.done?.cancelled;
   }
 
   apply(u: ScanUpdate) {
@@ -84,24 +110,25 @@ export class LiveScan {
       let x = this.nodes.get(d.id);
       if (!x) {
         const parent = d.parent == null ? null : this.nodes.get(d.parent);
-        x = {
-          id: d.id, parent: d.parent, name: d.name, kind: d.kind, allocated: 0, cloudOnly: 0,
-          category: d.category, cloud: d.cloud, depth: parent ? parent.depth + 1 : 0, born: n,
-        };
+        x = { ...d, childCount: 0, depth: parent ? parent.depth + 1 : 0, born: n, seen: n };
         this.nodes.set(d.id, x);
         if (d.parent == null) this.rootId = d.id;
-        if (d.parent != null) {
+        else {
           const list = this.kids.get(d.parent);
           if (list) list.push(d.id);
           else this.kids.set(d.parent, [d.id]);
-          this.dirty.add(d.parent);
+          if (parent) parent.childCount = this.kids.get(d.parent)!.length;
         }
-        // Open the first levels automatically, like the mockup.
-        if (d.kind === "dir" && x.depth <= 2) this.open.add(d.id);
+        if (x.depth <= 2) this.topNames.add(d.name);
+        // Open the root and its children automatically; deeper folders open on click.
+        if (d.kind === "dir" && x.depth <= 1) this.open.add(d.id);
+      } else {
+        const childCount = x.childCount;
+        Object.assign(x, d);
+        x.childCount = childCount;
+        x.seen = n;
       }
-      x.allocated = d.allocated;
-      x.cloudOnly = d.cloudOnly;
-      x.category = d.category;
+      if (x.kind !== "dir" && (this.largestFile == null || x.allocated > (this.nodes.get(this.largestFile)?.allocated ?? 0))) this.largestFile = x.id;
       if (d.parent != null) this.dirty.add(d.parent);
     }
     this.progress = u.progress;
@@ -109,18 +136,118 @@ export class LiveScan {
     this.tick = n;
   }
 
-  /** Children sorted by size (sorted lazily, only for folders that changed). */
-  children(id: NodeId): NodeId[] {
+  /** Children sorted by size. With `resort` false, lists keep their last order (new children are appended at
+   *  the end), so a growing tree doesn't jump around on every update; see `resortDue`. */
+  children(id: NodeId, resort = true): NodeId[] {
     const list = this.kids.get(id);
     if (!list) return [];
-    if (this.dirty.has(id)) {
-      list.sort((a, b) => {
-        const x = this.nodes.get(a)!, y = this.nodes.get(b)!;
-        return y.allocated + y.cloudOnly - (x.allocated + x.cloudOnly);
-      });
+    if (resort && this.dirty.has(id)) {
+      list.sort((a, b) => size(this.nodes.get(b)!) - size(this.nodes.get(a)!));
       this.dirty.delete(id);
     }
     return list;
+  }
+
+  /** True at most once every `every` ms: the caller may re-sort now. */
+  resortDue(every: number): boolean {
+    if (Date.now() - this.lastSort < every) return false;
+    this.lastSort = Date.now();
+    return true;
+  }
+
+  /** A folded subtree like `Backend.subtree`, built from what has been found so far. Doesn't reorder `kids`. */
+  tree(id: NodeId, maxDepth: number, minFraction: number): TreeDto | null {
+    const top = this.nodes.get(id);
+    if (!top) return null;
+    const threshold = size(top) * minFraction;
+    const build = (x: LiveNode, depth: number): TreeDto => {
+      const kids = this.kids.get(x.id);
+      const node: TreeDto = { ...x, childCount: kids?.length ?? 0, children: [] };
+      if (depth >= maxDepth || !kids) return node;
+      const big: LiveNode[] = [];
+      let folded = 0, fAlloc = 0, fLogical = 0, fCloud = 0, fFiles = 0;
+      for (const k of kids) {
+        const c = this.nodes.get(k)!;
+        if (size(c) >= threshold && size(c) > 0) big.push(c);
+        else {
+          folded++;
+          fAlloc += c.allocated; fLogical += c.logical; fCloud += c.cloudOnly;
+          fFiles += c.kind === "dir" ? c.fileCount : 1;
+        }
+      }
+      big.sort((a, b) => size(b) - size(a));
+      for (const c of big) node.children.push(build(c, depth + 1));
+      if (folded && fAlloc + fCloud > 0) {
+        node.children.push({
+          id: -(x.id + 1), parent: x.id, name: `${folded.toLocaleString("en-US")} smaller item${folded === 1 ? "" : "s"}`, kind: "other",
+          allocated: fAlloc, logical: fLogical, cloudOnly: fCloud, fileCount: fFiles, dirCount: 0, category: x.category,
+          modified: null, accessed: null, cloud: null, delta: null, hidden: false, accessDenied: false, notDescended: null,
+          childCount: folded, children: [],
+        });
+      }
+      return node;
+    };
+    return build(top, 0);
+  }
+
+  /** Root → node, as found so far (empty if the node hasn't been reported). */
+  pathTo(id: NodeId): LiveNode[] {
+    const out: LiveNode[] = [];
+    for (let x = this.nodes.get(id); x; x = x.parent == null ? undefined : this.nodes.get(x.parent)) out.unshift(x);
+    return out;
+  }
+
+  /** Full path text, e.g. "C:\Users\William\Videos". */
+  pathText(id: NodeId, sep: string): string {
+    const names = this.pathTo(id).map((n) => n.name);
+    if (!names.length) return "";
+    const tail = names.slice(1).join(sep);
+    return !tail ? names[0] : names[0].endsWith(sep) ? names[0] + tail : names[0] + sep + tail;
+  }
+
+  /** The branch being read right now (busiest folder and its ancestors). */
+  hot(): Set<NodeId> {
+    const set = new Set<NodeId>();
+    if (!this.running) return set;
+    for (let x = this.busiest; x != null; x = this.nodes.get(x)?.parent ?? null) set.add(x);
+    return set;
+  }
+
+  /** Still being measured: on the busiest branch, or its size changed in the last half second. */
+  measuring(id: NodeId): boolean {
+    const x = this.nodes.get(id);
+    if (!this.running || !x || x.kind !== "dir") return false;
+    return this.tick - x.seen < 5 || this.hot().has(id);
+  }
+
+  /** Bytes found so far per category. Each node counts what its reported children don't explain (files the
+   *  scanner only sends as folder totals), under its own category, so the parts add up to the root's total. */
+  byCategory(): Map<Category, number> {
+    const m = new Map<Category, number>();
+    for (const x of this.nodes.values()) {
+      let own = x.allocated;
+      const kids = this.kids.get(x.id);
+      if (kids) for (const k of kids) own -= this.nodes.get(k)!.allocated;
+      if (own > 0) m.set(x.category, (m.get(x.category) ?? 0) + own);
+    }
+    return m;
+  }
+
+  /** Search what's been found so far (largest first). */
+  search(f: LiveFilter, limit: number): LiveNode[] {
+    const text = f.text?.trim().toLowerCase() ?? "";
+    const cats = f.categories?.length ? new Set<string>(f.categories) : null;
+    const cutoff = f.olderThanDays ? Date.now() / 1000 - f.olderThanDays * 86400 : null;
+    const out: LiveNode[] = [];
+    for (const x of this.nodes.values()) {
+      if (x.id === this.rootId) continue;
+      if (text && !x.name.toLowerCase().includes(text)) continue;
+      if (cats && !cats.has(x.category)) continue;
+      if (f.minBytes && size(x) < f.minBytes) continue;
+      if (cutoff != null && (x.modified == null || x.modified > cutoff)) continue;
+      out.push(x);
+    }
+    return out.sort((a, b) => size(b) - size(a)).slice(0, limit);
   }
 }
 
@@ -184,6 +311,31 @@ class AppState {
 
   get volume(): VolumeInfo | undefined {
     return this.volumes.find((v) => v.id === this.volumeId);
+  }
+
+  /** A scan is running. */
+  get scanning(): boolean {
+    return !!this.scan && !this.scan.done;
+  }
+
+  /** The tree Overview and Explore draw from the scan mirror instead of the backend: while a scan runs, and
+   *  after a stopped one (a stopped scan isn't saved; its partial tree stays until the next scan or a restart). */
+  get live(): LiveScan | null {
+    const s = this.scan;
+    return s && (!s.done || s.done.cancelled) ? s : null;
+  }
+
+  /** Scan progress, 0–1: bytes found over used space, capped at 99% until the scan is done. */
+  get scanPct(): number {
+    const s = this.scan;
+    if (!s) return 0;
+    if (s.done && !s.done.cancelled) return 1;
+    return Math.min(0.99, s.progress.allocatedBytes / Math.max(1, this.usedBytes));
+  }
+
+  get usedBytes(): number {
+    const v = this.volume;
+    return v ? v.totalBytes - v.freeBytes : 0;
   }
 
   get mainView(): MainView {
@@ -256,6 +408,8 @@ class AppState {
 
   private routeFromHash() {
     const h = location.hash.replace(/^#\/?/, "") as Route;
+    // The Scan screen is gone: the scan shows in place on Overview and Explore. Old links land on Overview.
+    if ((h as string) === "scan") history.replaceState(null, "", "#/overview");
     this.route = ROUTES.includes(h) ? h : "overview";
   }
 
@@ -278,6 +432,14 @@ class AppState {
     if ("theme" in patch) this.applyTheme();
   }
 
+  /** Drive chips. Only the current drive is scanned in this version; others explain why. */
+  pickVolume(id: string) {
+    const target = this.volumes.find((x) => x.id === id);
+    if (!target || id === this.volumeId) return;
+    if (target.fileSystem === "Virtual") this.say(`${target.label} is a cloud drive: listed, never scanned for content.`);
+    else this.say(`${target.label} hasn't been scanned in this preview.`);
+  }
+
   /** "Scan a folder…": pick a folder natively, then scan it. */
   async scanFolder() {
     try {
@@ -293,14 +455,11 @@ class AppState {
     try { localStorage.setItem("lustro-binary", on ? "1" : "0"); } catch { /* storage unavailable */ }
   }
 
-  /** Scan the current drive, or `folder` (a path from the folder picker). */
   /** Scan the current drive, or `folder` (a path from the folder picker). On Windows, Fast scan starts an
    *  elevated helper that shows a UAC prompt, so the user sees an explanation first (`fastConfirm`). */
   async startScan(folder?: string, mode?: Settings["scanMode"]) {
-    if (this.scan && !this.scan.done) {
-      this.go("scan");
-      return;
-    }
+    // Starting a scan never changes the screen; the context bar shows it.
+    if (this.scanning) return;
     const root = folder ?? this.volume?.mountPath ?? "/";
     const chosen = mode ?? this.settings.scanMode;
     if (!mode && chosen === "fast" && this.platform === "windows") {
@@ -311,13 +470,14 @@ class AppState {
     const id = await this.backend.startScan({
       root, mode: chosen, crossFilesystems: false, includeRemote: false, excluded: $state.snapshot(this.settings.excluded),
     });
+    // Node ids are per scan (arena indices): an id from the previous tree means something else in the new one.
+    this.selected = null;
     this.scan = new LiveScan(id, root, chosen);
-    this.go("scan");
   }
 
   /** A scan or a cleanup apply is running: updates wait, and the ready toast is held. */
   get busy(): boolean {
-    return (!!this.scan && !this.scan.done) || this.applying;
+    return this.scanning || this.applying;
   }
 
   /** The gear dot: an update is available, or ready but held back (busy, or "Later"). */

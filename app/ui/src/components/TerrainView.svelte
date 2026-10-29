@@ -19,8 +19,10 @@
     follow?: boolean;
     onSelect?: (id: NodeId) => void;
     onAutoFlat?: () => void;
+    /** Camera arrived at, or left, the full view of the whole map (for a "back to full view" button). */
+    onFullViewChange?: (full: boolean) => void;
   }
-  let { tree, pins = [], selPath = null, compact = false, flat = false, under = false, follow = false, onSelect, onAutoFlat }: Props = $props();
+  let { tree, pins = [], selPath = null, compact = false, flat = false, under = false, follow = false, onSelect, onAutoFlat, onFullViewChange }: Props = $props();
 
   let el: HTMLDivElement | undefined = $state();
   let handle: TerrainHandle | null = $state(null);
@@ -45,6 +47,7 @@
           }, {
             onSelect: (id) => onSelect?.(id),
             onAutoFlat: () => onAutoFlat?.(),
+            onFullViewChange: (full) => onFullViewChange?.(full),
           });
           lastTree = tree;
           handle = h;
@@ -61,6 +64,9 @@
       handle = null;
     };
   });
+
+  /** Animate back to the full view (call through bind:this). */
+  export function resetView(): void { handle?.resetView(); }
 
   // Keep the module in sync with props after mounting.
   $effect(() => {

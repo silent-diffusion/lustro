@@ -78,7 +78,7 @@ A 3D, rotatable contour map that shows real data:
 | Pins | **Flag** = largest file. **Coral arrow** = top grower since the last scan. **Pale-blue twin** = duplicate set. **Hollow cloud** = cloud-only placeholder. |
 | Dashed route | The path from the drive root to the selected item, drawn across the terrain like the climbing route in the reference. |
 
-You can drag to rotate, scroll to zoom, hover a pin for details and click to open it in Explore. A 2D flat-map toggle draws the same contours from above for anyone who finds 3D hard to read.
+You can drag to rotate, scroll to zoom, hover a pin for details and click to open it in Explore. When zoomed in, a **Full view** button (bottom-left, or the Home key) flies back to the whole drive. A 2D flat-map toggle draws the same contours from above for anyone who finds 3D hard to read.
 
 The prototype uses a square treemap inside a round ring. For production, a **Voronoi treemap** would fill the circle naturally. That's a later refinement.
 

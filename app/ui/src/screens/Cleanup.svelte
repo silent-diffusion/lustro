@@ -9,6 +9,8 @@
   import { inTauri } from "../ipc";
   import MainViz from "../components/MainViz.svelte";
   import type { Mark } from "../components/CanvasMap.svelte";
+  import QueueBar from "../components/QueueBar.svelte";
+  import ScanBanner from "../components/ScanBanner.svelte";
 
   const GROUP_ICON: Record<SuggestionGroup, IconName> = {
     duplicates: "twins", devCaches: "treeIc", tempFiles: "cleanup", oldDownloads: "clock", staleLarge: "flag", freeUpCloud: "cloud",
@@ -60,6 +62,9 @@
   const parent = $derived(path.length > 1 ? path[path.length - 2] : null);
   const focusPath = $derived(path.length && q && path[path.length - 1].id === q.nodeId ? path.map((p) => p.id) : null);
   const isFree = (s: SuggestionDto) => s.group === "freeUpCloud";
+  /** After a stopped scan the current tree is partial, while suggestions come from the last complete scan:
+   *  their node ids don't match it, so the map (and where-it-lives path) is hidden until the next full scan. */
+  const mapStale = $derived(!!app.live?.partial);
 
   const visible = $derived(Q.map((_, i) => i).filter((i) => !group || Q[i].group === group));
   const total = $derived(Q.reduce((s, x) => s + x.bytes, 0));
@@ -100,10 +105,16 @@
     const v = Q.map((_, i) => i).filter((i) => !g || Q[i].group === g);
     cur = v.find((i) => !decision.has(Q[i].id)) ?? v[0] ?? 0;
   }
-  const upNext = $derived.by(() => {
+  /** Undecided items in view after the current one, in queue order. */
+  const upAll = $derived.by(() => {
     const v = visible, pos = v.indexOf(cur);
-    return v.slice(pos + 1).concat(v.slice(0, Math.max(0, pos))).filter((i) => !decision.has(Q[i].id)).slice(0, 4);
+    return v.slice(pos + 1).concat(v.slice(0, Math.max(0, pos))).filter((i) => !decision.has(Q[i].id));
   });
+  const UP_MAX = 8;
+  let showAll = $state(false);
+  // The expanded list resets when the group filter changes.
+  $effect(() => { void group; showAll = false; });
+  const upNext = $derived(showAll ? upAll : upAll.slice(0, UP_MAX));
 
   function onKey(e: KeyboardEvent) {
     const target = e.target instanceof Element ? e.target : null;
@@ -183,23 +194,19 @@
 
 <svelte:window onkeydown={onKey} />
 
+<ScanBanner text="Scanning… suggestions refresh when it finishes. Decisions you've already made are kept." />
+
 <section class="card">
   <div class="qbar">
     <div><h2>Review queue</h2><div class="faint xs">{Q.length} suggestions · {app.fb(total)} could be freed</div></div>
-    <div>
-      <div class="qsegs">
-        {#each Q as s, i (s.id)}
-          {@const d = decision.get(s.id)}
-          <button style:flex={Math.max(1, s.bytes / 1e9)} class="{d ?? ''}" class:free={isFree(s)} class:cur={i === cur} title="{s.name} · {app.fb(s.bytes)}" aria-label="{s.name}, {d ?? 'undecided'}" onclick={() => (cur = i)}></button>
-        {/each}
-      </div>
-      <div class="qmeta"><span>{decided} of {Q.length} decided</span><span>Nothing changes until you apply</span></div>
+    <div class="min0">
+      <QueueBar queue={Q} items={visible} {cur} {decision} {decided} onPick={(i) => (cur = i)} />
     </div>
     <div class="tally">
       <div title={toFree.length ? `${toDelete.length} to ${app.w.trash}, ${toFree.length} back to cloud-only` : undefined}><span class="k">Remove</span><span class="v up">{removing.length} · {app.fb(removeBytes)}</span></div>
       <div><span class="k">Keep</span><span class="v down">{count("keep")}</span></div>
       <div><span class="k">Later</span><span class="v amber">{count("later")}</span></div>
-      <button class="btn primary" disabled={!removing.length && !count("keep")} onclick={() => { result = null; dialog = true; }}>{removing.length ? `Apply · free ${app.fb(removeBytes)}` : "Apply"}</button>
+      <button class="btn primary" disabled={app.scanning || (!removing.length && !count("keep"))} title={app.scanning ? "Waits for the scan to finish" : undefined} onclick={() => { result = null; dialog = true; }}>{removing.length ? `Apply · free ${app.fb(removeBytes)}` : "Apply"}</button>
     </div>
   </div>
   <div class="groups">
@@ -229,18 +236,20 @@
         </div></div>
       </div>
       <div class="crumbs mono">
-        {#each path as p, i (p.id)}{#if i}<span>›</span>{/if}{#if i === path.length - 1}<b>{p.name}</b>{:else}<span>{p.name}</span>{/if}{/each}
+        {#if !mapStale}{#each path as p, i (p.id)}{#if i}<span>›</span>{/if}{#if i === path.length - 1}<b>{p.name}</b>{:else}<span>{p.name}</span>{/if}{/each}{/if}
       </div>
       <div class="map-body" bind:clientWidth={mapW}>
-        {#if app.root}
+        {#if mapStale}
+          <div class="stale"><Icon name="map" size={24} /><span>The map comes back after a complete scan.</span><span class="faint xs">The last scan was stopped, so it doesn't match these suggestions.</span></div>
+        {:else if app.root}
           <MainViz bind:this={viz} rootId={app.root.id} {view} maxDepth={8} {focusPath} {marks} follow onSelect={pickFromMap} />
         {/if}
-        {#if pin}
+        {#if pin && !mapStale}
           <div class="mark-pin" style:left="{pin.x}px" style:top="{pin.y}px"><div class="head">{q.name} · {app.fb(q.bytes)}</div><div class="stem"></div><div class="dot2"></div></div>
         {/if}
       </div>
       <div class="context-line">
-        {#if parent}<span>Inside <b>{parent.name}</b> ({app.fb(size(parent))}). Removing this frees <b class="up">{((q.bytes / Math.max(1, size(parent))) * 100).toFixed(0)}%</b> of that folder.</span>{/if}
+        {#if parent && !mapStale}<span>Inside <b>{parent.name}</b> ({app.fb(size(parent))}). Removing this frees <b class="up">{((q.bytes / Math.max(1, size(parent))) * 100).toFixed(0)}%</b> of that folder.</span>{/if}
         <span class="legend">
           <span><span class="sw" style:box-shadow="inset 0 0 0 2px var(--accent)"></span>This item</span>
           <span><span class="sw rm"></span>Remove</span>
@@ -250,13 +259,14 @@
       </div>
     </section>
 
+    <div class="rcol">
     <section class="card dc">
       <div class="card-head head"><div class="ic"><Icon name={GROUP_ICON[q.group]} size={18} /></div><h2>{GROUP_LABEL[q.group]}</h2><span class="badge {q.safety}">{safetyLabel(q)}</span><span class="pos">{cur + 1} / {Q.length}</span></div>
       <h3>{q.name}</h3>
       {#if q.cloud}<div class="cb"><span class="badge cloud">{PROVIDER[q.cloud.provider].label} · {CLOUD_STATE[q.cloud.state].label}</span></div>{/if}
-      <div class="mono faint xs brk">{parent ? q.path.slice(0, q.path.length - q.name.length - 1) : q.path}</div>
+      <div class="mono faint xs brk">{parent && !mapStale ? q.path.slice(0, q.path.length - q.name.length - 1) : q.path}</div>
       <div class="bigsize">{app.fb(q.bytes)}</div>
-      {#if parent && app.root}<div class="faint xs">{((q.bytes / Math.max(1, size(parent))) * 100).toFixed(0)}% of {parent.name} · {((q.bytes / Math.max(1, size(app.root))) * 100).toFixed(1)}% of {app.volume?.label}</div>{/if}
+      {#if parent && app.root && !mapStale}<div class="faint xs">{((q.bytes / Math.max(1, size(parent))) * 100).toFixed(0)}% of {parent.name} · {((q.bytes / Math.max(1, size(app.root))) * 100).toFixed(1)}% of {app.volume?.label}</div>{/if}
       <div class="why"><span class="k">Why it's suggested</span>{q.reason}</div>
       {#if q.cloud?.state === "pinned"}
         <div class="pinwarn"><b>Pinned.</b> You chose to keep this on the device, probably for offline use. Freeing it unpins it, and it won't open without an internet connection.</div>
@@ -269,7 +279,7 @@
       {/if}
       <div class="kv">
         <span>Last opened</span><span>{fmtAge(q.lastOpened)}</span>
-        <span>Type</span><span>{path.length ? CATEGORY_LABEL[path[path.length - 1].category] : ""}</span>
+        <span>Type</span><span>{path.length && !mapStale ? CATEGORY_LABEL[path[path.length - 1].category] : ""}</span>
         <span>Found by</span><span>{q.howFound}</span>
       </div>
       <div class="decide">
@@ -283,15 +293,28 @@
       </div>
       <div class="decide-note">{isFree(q) && q.cloud ? `The file stays in ${PROVIDER[q.cloud.provider].label} and stays listed; only the local copy goes.` : "Remove adds it to the list you apply at the end."} Keep stops suggesting it.</div>
       <div class="navrow"><button onclick={() => step(-1)}>← Previous</button><button onclick={() => step(1)}>Next →</button></div>
-      <div class="next">
-        <span class="k">Up next</span>
+    </section>
+
+    <section class="card upnext">
+      <div class="card-head"><div class="ic"><Icon name="clock" size={18} /></div><h2>Up next</h2><span class="sub">{upAll.length} left in {group ? "this group" : "the queue"}</span></div>
+      <div class="up-list" class:expanded={showAll}>
         {#each upNext as i (Q[i].id)}
-          <button class="row" onclick={() => (cur = i)}><Icon name={GROUP_ICON[Q[i].group]} size={12} /><span class="name">{Q[i].name}</span><span class="mono muted">{app.fb(Q[i].bytes)}</span></button>
+          <button class="up-row" onclick={() => (cur = i)}><Icon name={GROUP_ICON[Q[i].group]} size={16} /><span class="name">{Q[i].name}</span><span class="mono sz">{app.fb(Q[i].bytes)}</span></button>
         {:else}
-          <div class="faint xs pad">Nothing left in this view.</div>
+          <div class="up-empty">Nothing left in this view.</div>
         {/each}
+        {#if upAll.length > UP_MAX}
+          <div class="up-more">
+            {#if showAll}
+              <span></span><button class="linkbtn" onclick={() => (showAll = false)}>Show fewer</button>
+            {:else}
+              <span>+{upAll.length - UP_MAX} more</span><button class="linkbtn" onclick={() => (showAll = true)}>Show all</button>
+            {/if}
+          </div>
+        {/if}
       </div>
     </section>
+    </div>
   </div>
 {/if}
 
@@ -373,14 +396,6 @@
   .brk { word-break: break-all; }
   .qbar { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: var(--sp-6); align-items: center; }
   .qbar h2 { margin: 0; font-size: var(--fs-lg); }
-  .qsegs { display: flex; gap: 3px; height: 12px; }
-  .qsegs button { border: 0; padding: 0; border-radius: 4px; background: var(--stroke-strong); cursor: pointer; min-width: 6px; transition: background .2s; }
-  .qsegs button.remove { background: var(--coral); }
-  .qsegs button.free.remove { background: var(--cat-cloud); }
-  .qsegs button.keep { background: var(--lime); }
-  .qsegs button.later { background: transparent; box-shadow: inset 0 0 0 1.5px var(--amber); }
-  .qsegs button.cur { outline: 2px solid var(--text); outline-offset: 2px; }
-  .qmeta { display: flex; justify-content: space-between; margin-top: 8px; font-size: var(--fs-xs); color: var(--text-3); }
   .tally { display: flex; gap: var(--sp-4); align-items: center; }
   .tally > div { display: grid; text-align: right; }
   .tally .k { font-size: 10px; text-transform: uppercase; letter-spacing: .06em; color: var(--text-3); }
@@ -403,14 +418,33 @@
   .mark-pin .dot2 { width: 9px; height: 9px; border-radius: 50%; background: var(--accent); animation: ping 1.6s infinite; }
   @keyframes ping { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 70%, transparent); } 100% { box-shadow: 0 0 0 14px transparent; } }
 
-  .dc { display: flex; flex-direction: column; }
+  .stale { position: absolute; inset: 0; display: grid; place-content: center; justify-items: center; gap: 6px; text-align: center; color: var(--text-3); padding: 16px; }
+  .rcol { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+  .dc { display: flex; flex-direction: column; flex: none; }
+  .min0 { min-width: 0; }
+  .upnext { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+  .up-list { display: grid; gap: 2px; align-content: start; }
+  .up-list.expanded { max-height: 420px; overflow-y: auto; }
+  .up-row {
+    display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; gap: 10px; align-items: center; min-height: 36px; padding: 8px 10px;
+    border: 0; border-radius: var(--r-sm); background: none; color: var(--text); text-align: left; font: inherit; font-size: var(--fs-sm); cursor: pointer;
+  }
+  .up-row :global(svg) { color: var(--text-3); }
+  .up-row:hover { background: var(--surface-2); }
+  .up-row:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .up-row .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .up-row .sz { font-size: var(--fs-xs); color: var(--text-2); font-variant-numeric: tabular-nums; }
+  .up-more { display: flex; justify-content: space-between; align-items: center; padding: 8px 10px 8px 36px; font-size: var(--fs-xs); color: var(--text-3); }
+  .up-empty { padding: 8px 10px; font-size: var(--fs-sm); color: var(--text-3); }
+  .linkbtn { border: 0; background: none; padding: 0; color: var(--text-3); font-size: var(--fs-xs); text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
+  .linkbtn:hover { color: var(--text); }
   .head { margin-bottom: 8px; }
   .pos { margin-left: auto; font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-3); }
   .dc h3 { margin: 4px 0 2px; font-size: var(--fs-xl); word-break: break-word; line-height: 1.2; }
   .cb { margin: 4px 0; }
   .bigsize { font-family: var(--font-mono); font-size: var(--fs-hero); font-weight: var(--fw-strong); letter-spacing: -.03em; margin: 12px 0 4px; line-height: 1; }
   .why { background: var(--surface-2); border-radius: var(--r-md); padding: 12px 14px; margin: 14px 0 4px; font-size: var(--fs-sm); }
-  .why .k, .next .k { font-size: 10px; text-transform: uppercase; letter-spacing: .06em; color: var(--text-3); display: block; margin-bottom: 2px; }
+  .why .k { font-size: 10px; text-transform: uppercase; letter-spacing: .06em; color: var(--text-3); display: block; margin-bottom: 2px; }
   .pinwarn { border: 1px solid var(--amber); color: var(--amber); border-radius: var(--r-md); padding: 10px 12px; font-size: var(--fs-xs); margin: 8px 0 4px; }
   .twin { display: grid; gap: 6px; margin: 4px 0 8px; }
   .twin > div { display: grid; grid-template-columns: 70px minmax(0, 1fr); gap: 8px; font-size: var(--fs-xs); align-items: center; padding: 8px 10px; border-radius: var(--r-sm); border: 1px solid var(--stroke); }
@@ -431,9 +465,6 @@
   .decide-note { font-size: var(--fs-xs); color: var(--text-3); margin-top: 8px; text-align: center; }
   .navrow { display: flex; justify-content: space-between; margin-top: 10px; }
   .navrow button { border: 0; background: none; color: var(--text-2); font-size: var(--fs-xs); }
-  .next { margin-top: 14px; border-top: 1px solid var(--stroke); padding-top: 10px; }
-  .next .row { grid-template-columns: 12px minmax(0, 1fr) auto; color: var(--text-2); padding: 5px 4px; cursor: pointer; font-size: var(--fs-xs); }
-  .pad { padding: 6px 4px; }
   .done-card { margin-top: var(--sp-4); text-align: center; padding: 40px 20px; }
 
   details.more { margin-top: var(--sp-4); }

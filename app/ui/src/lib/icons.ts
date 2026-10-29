@@ -19,6 +19,8 @@ export const icons = {
   twins: s('<rect x="3" y="7" width="11" height="13" rx="2"/><rect x="10" y="3" width="11" height="13" rx="2" fill="currentColor" fill-opacity=".25"/>', 'fill="none" stroke="currentColor" stroke-width="2.2"'),
   cloud: s('<path d="M7 18a5 5 0 1 1 1-9.9A6 6 0 0 1 19.5 11 3.5 3.5 0 0 1 18 18z"/>', 'fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"'),
   route: s('<circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="6" r="2.5"/><path d="M8 16c4-1 2-6 6-8" stroke-dasharray="2 3"/>'),
+  check: s('<path d="M5 12.5l4.5 4.5L19 7.5"/>', 'fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"'),
+  fullView: s('<path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/><circle cx="12" cy="12" r="2"/>'),
   expand: s('<path d="M14 4h6v6M10 20H4v-6M20 4l-7 7M4 20l7-7"/>'),
   map: s('<path d="M3 6l6-3 6 3 6-3v15l-6 3-6-3-6 3z"/><path d="M9 3v15M15 6v15"/>'),
   pie: s('<circle cx="12" cy="12" r="9"/><path d="M12 3v9l6.5 6.2"/>'),

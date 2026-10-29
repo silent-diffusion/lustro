@@ -18,6 +18,7 @@ import { FpsWatch } from "./fps";
 import { Flat2D } from "./flat2d";
 import { Overlay, PIN_LABEL, formatBytes } from "./overlay";
 import { Scene3D } from "./scene3d";
+import { AutoSpin, VIEW_MS } from "./rotation";
 
 export type { MountTerrain, TerrainEvents, TerrainHandle, TerrainOptions, TerrainPin } from "./types";
 
@@ -56,6 +57,13 @@ class Terrain implements TerrainHandle {
   private h = 0;
   private disposed = false;
   private ro: ResizeObserver;
+  private spin = new AutoSpin();
+  /** A selection or fly-to holds the view: no auto-rotation until the user returns to full view. */
+  private held = false;
+  /** A fly-to moved the camera off the full view (until resetView, or the user navigates home). */
+  private flown = false;
+  private fullView = true;
+  private lastNow = -1;
   private motion = typeof matchMedia === "function" ? matchMedia("(prefers-reduced-motion: reduce)") : null;
 
   constructor(el: HTMLElement, private tree: TreeDto, private opts: TerrainOptions, private events: TerrainEvents) {
@@ -73,7 +81,7 @@ class Terrain implements TerrainHandle {
     this.overlay = new Overlay(this.root, {
       onPinEnter: (i, ev) => this.pinHover(i, ev),
       onPinLeave: () => this.setHover(-1, 0, 0),
-      onPinClick: (i) => { const p = this.pins[i]; if (p) this.pick(p.pin.nodeId); },
+      onPinClick: (i) => { const p = this.pins[i]; if (p) { this.pick(p.pin.nodeId); this.flyTo(p.pin.nodeId); } },
     });
     this.flatMode = opts.flat || !this.scene;
     if (this.scene) {
@@ -82,7 +90,13 @@ class Terrain implements TerrainHandle {
       c.addEventListener("pointerdown", this.onDown);
       c.addEventListener("pointerup", this.onUp);
       c.addEventListener("pointerleave", this.onLeave);
+      this.scene.onInteract = () => {
+        this.spin.poke(performance.now());
+        // Navigating back to the full view by hand counts as returning from a fly-to.
+        if (this.scene && !this.scene.interacting && this.scene.isHome(this.under)) this.flown = false;
+      };
     }
+    this.root.addEventListener("keydown", this.onKey);
     this.motion?.addEventListener?.("change", this.applyMotion);
     this.applyTheme();
     this.rebuild();
@@ -153,11 +167,24 @@ class Terrain implements TerrainHandle {
   private applyMotion = (): void => {
     const reduce = !!this.motion?.matches;
     if (this.scene) {
-      this.scene.ease = reduce ? 1 : 0.12;
-      this.scene.setAutoRotate(this.compact && !reduce && !this.under);
+      this.scene.duration = reduce ? 0 : VIEW_MS;
+      this.scene.setZoomEnabled(!this.compact);
     }
-    this.flat.ease = reduce ? 1 : 0.18;
+    this.flat.duration = reduce ? 0 : VIEW_MS;
   };
+
+  /** Auto-rotation wanted at all: on by default in the compact card, never with reduced motion. */
+  private get spinAllowed(): boolean {
+    return (this.opts.autoRotate ?? this.compact) && !this.motion?.matches && !this.under;
+  }
+
+  private setFullView(full: boolean): void {
+    if (full === this.fullView) return;
+    this.fullView = full;
+    this.events.onFullViewChange?.(full);
+  }
+
+  private onKey = () => { this.spin.poke(performance.now()); };
 
   private applyMode(): void {
     if (this.scene) this.scene.canvas.style.display = this.flatMode ? "none" : "";
@@ -206,6 +233,7 @@ class Terrain implements TerrainHandle {
 
   private pick(id: NodeId): void {
     this.select(id);
+    this.held = true;
     this.events.onSelect?.(id);
   }
 
@@ -261,8 +289,11 @@ class Terrain implements TerrainHandle {
   private tick = (now: number) => {
     if (this.disposed) return;
     this.raf = requestAnimationFrame(this.tick);
+    const dt = this.lastNow < 0 ? 1 / 60 : Math.max(0, now - this.lastNow) / 1000;
+    this.lastNow = now;
     if (this.flatMode || !this.scene) {
       if (this.flat.update() || this.overlayDirty) this.placeOverlay();
+      this.setFullView(this.flat.isHome());
       this.lastRendered = false;
       return;
     }
@@ -272,7 +303,11 @@ class Terrain implements TerrainHandle {
       const sq = this.scene.pick(x, y);
       this.setHover(sq ? this.hm.owner[sampleIndex(this.hm, sq[0], sq[1])] : -1, x, y);
     }
-    const drew = this.scene.update();
+    if (this.scene.interacting) this.spin.poke(now);
+    const full = this.scene.isHome(this.under) && !this.flown;
+    this.setFullView(full);
+    const speed = this.spin.update(now, dt * 1000, { allowed: this.spinAllowed, fullView: full, held: this.held });
+    const drew = this.scene.update(speed, dt);
     if (drew || this.overlayDirty) this.placeOverlay();
     if (drew && this.autoFlatAllowed && !document.hidden && this.fps.frame(now, this.lastRendered)) {
       this.autoFlatAllowed = false;
@@ -352,6 +387,8 @@ class Terrain implements TerrainHandle {
     if (this.disposed) return;
     this.selId = id;
     this.selPath = path;
+    if (id === null) this.held = false;
+    else if (id !== this.tree.id) this.held = true;
     this.applySelection();
   }
 
@@ -360,11 +397,26 @@ class Terrain implements TerrainHandle {
     const k = this.indexOf(id, id === this.selId ? this.selPath : undefined);
     if (k < 0) return;
     const node = this.layout.nodes[k];
+    if (k === 0) { this.resetView(); return; }
     this.under = false;
-    if (k === 0) { this.scene?.view("home"); this.flat.home(); return; }
+    this.held = true;
+    this.flown = true;
     this.scene?.flyTo(node);
     this.flat.flyTo(node);
   }
+
+  /** Back to the full view in the current mode (3D, flat, or Look under); selection and route stay. */
+  resetView(): void {
+    if (this.disposed) return;
+    this.held = false;
+    this.flown = false;
+    this.scene?.view(this.under ? "under" : "home");
+    this.flat.home();
+    // Rotation eases back in after the usual idle time once the camera is home.
+    this.spin.poke(performance.now());
+  }
+
+  isFullView(): boolean { return this.fullView; }
 
   setFlat(flat: boolean): void {
     if (this.disposed) return;
@@ -378,9 +430,10 @@ class Terrain implements TerrainHandle {
   }
 
   lookUnder(on: boolean): void {
-    if (this.disposed) return;
+    if (this.disposed || on === this.under) return;
     this.under = on;
     this.scene?.view(on ? "under" : "home");
+    this.spin.poke(performance.now());
     this.applyMotion();
   }
 
@@ -411,6 +464,7 @@ class Terrain implements TerrainHandle {
     }
     this.flat.dispose();
     this.overlay.dispose();
+    this.root.removeEventListener("keydown", this.onKey);
     this.root.remove();
     this.pins = [];
     this.labels = [];
