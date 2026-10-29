@@ -78,9 +78,8 @@ and update identity, so don't change it after the first release.
 ## Updates
 
 - The endpoint is `https://github.com/silent-diffusion/lustro/releases/latest/download/latest.json`.
-  The public key in `tauri.conf.json` (`plugins.updater.pubkey`) is a **placeholder** until the
-  maintainers create the key pair; the release workflow refuses to run while it is. **No signing
-  key is in the repo.**
+  The public key in `tauri.conf.json` (`plugins.updater.pubkey`) checks every update; the release
+  workflow refuses to run if it is ever a placeholder. **No signing key is in the repo.**
 - `requireSignedVersion` is on (we have no old releases), so a manifest can't pair a newer version
   with an older signed package.
 - `createUpdaterArtifacts` is on, but builds run with `--no-sign`; the installer is signed for the

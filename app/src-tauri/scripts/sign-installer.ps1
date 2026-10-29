@@ -5,7 +5,8 @@
 # fetch-tauri-cli.mjs, so nothing from the build can reach the private key. With the NSIS updater,
 # the installer itself is the update package, so it is the only file that needs a signature.
 #
-# Needs TAURI_SIGNING_PRIVATE_KEY and TAURI_SIGNING_PRIVATE_KEY_PASSWORD in the environment.
+# Needs TAURI_SIGNING_PRIVATE_KEY in the environment, plus TAURI_SIGNING_PRIVATE_KEY_PASSWORD if
+# the key has a password.
 # The signature is bound to the version (--app-version), as requireSignedVersion requires.
 #
 # Usage:  pwsh sign-installer.ps1 -Installer <Lustro-Setup-x.y.z.exe> -Version x.y.z [-TauriJs <tauri.js>]

@@ -21,16 +21,18 @@ the key is never available to an unprotected workflow run.
    3. Click **Save protection rules**.
 3. **Generate the key pair** on a trusted machine, outside any git checkout (after `npm ci` in
    `app/ui`): `app/ui/node_modules/.bin/tauri signer generate -w <a path outside the repo>`.
-   Choose a strong password.
+   A password is optional (`--ci` makes a key without one); the key is protected by the
+   environment's encrypted secrets and by keeping the backup offline.
 4. **Add the secrets to the environment, not the repository.** In the same `release` environment
    page, under **Environment secrets → Add environment secret**, add:
    - `TAURI_SIGNING_PRIVATE_KEY`: the private key file's contents;
-   - `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`: its password.
+   - `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`: its password, if the key has one (leave it out
+     otherwise).
 
    Don't add them under **Secrets and variables → Actions → Repository secrets**.
 5. Put the **public** key (`.pub` file contents) in `app/src-tauri/tauri.conf.json` →
    `plugins.updater.pubkey`, replacing the placeholder, and commit that.
-6. Back up the private key and password offline. If the key is lost, installed copies can't be
+6. Back up the private key (and its password, if any) offline. If the key is lost, installed copies can't be
    updated any more; if it leaks, revoke it by shipping a new public key in a release signed with
    the old one, and rotate the secrets.
 
