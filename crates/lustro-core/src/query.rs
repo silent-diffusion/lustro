@@ -69,9 +69,16 @@ pub fn path_to(tree: &Tree, id: NodeId, deltas: Option<&Deltas>) -> Vec<NodeDto>
         .collect()
 }
 
+/// Size a chart gives a node: bytes on disk plus cloud-only bytes, as the UI sizes nodes
+/// (so cloud-only folders show up, e.g. as terrain lakes, instead of always folding).
+fn display_size(n: &Node) -> u64 {
+    n.totals.allocated.saturating_add(n.totals.cloud_only)
+}
+
 /// Nested subtree under `id` for charts, `max_depth` levels deep (0 = just the node).
-/// Children smaller than `min_fraction` of `id`'s allocated bytes are folded into one
-/// "other" node per parent (id `-(parentId + 1)`, `childCount` = number folded).
+/// Children whose display size (allocated + cloud-only) is below `min_fraction` of `id`'s
+/// display size are folded into one "other" node per parent (id `-(parentId + 1)`,
+/// `childCount` = number folded). Children are ordered by display size, largest first.
 pub fn subtree(
     tree: &Tree,
     id: NodeId,
@@ -80,7 +87,7 @@ pub fn subtree(
     deltas: Option<&Deltas>,
 ) -> Option<TreeDto> {
     let top = tree.get(id)?;
-    let threshold = (top.totals.allocated as f64 * min_fraction.max(0.0)).ceil() as u64;
+    let threshold = (display_size(top) as f64 * min_fraction.max(0.0)).ceil() as u64;
     Some(build_subtree(tree, top, max_depth, threshold, deltas))
 }
 
@@ -94,10 +101,14 @@ fn build_subtree(
     let mut children = Vec::new();
     if depth_left > 0 && !n.children().is_empty() {
         let mut kids: Vec<&Node> = n.children().iter().filter_map(|&c| tree.get(c)).collect();
-        kids.sort_by(|a, b| compare(a, b, SortKey::Allocated, None));
+        kids.sort_by(|a, b| {
+            display_size(b)
+                .cmp(&display_size(a))
+                .then_with(|| a.id.cmp(&b.id))
+        });
         let mut fold: Option<TreeDto> = None;
         for k in kids {
-            if threshold > 0 && k.totals.allocated < threshold {
+            if threshold > 0 && display_size(k) < threshold {
                 let f = fold.get_or_insert_with(|| fold_node(n));
                 f.allocated += k.totals.allocated;
                 f.logical += k.totals.logical;
@@ -400,6 +411,56 @@ mod tests {
             .collect();
         assert_eq!(names, ["Docs", "c.pdf"]);
         assert_eq!(search(&t, &f, 2, 0, None).len(), 2);
+    }
+
+    /// sample() plus, under William (2): a cloud-only folder OneDrive (7) holding a 500-byte
+    /// cloud-only file (8), and a 5-byte cloud-only file (9).
+    fn with_cloud() -> Tree {
+        use crate::model::{CloudInfo, CloudProvider, CloudState};
+        let cloud = |name: &str, size: u64| {
+            let mut m = meta(name, NodeKind::File, 0);
+            m.logical_size = size;
+            m.cloud = Some(CloudInfo {
+                provider: CloudProvider::OneDrive,
+                state: CloudState::CloudOnly,
+            });
+            m
+        };
+        let mut r = sample();
+        r.push(rec(7, Some(2), meta("OneDrive", NodeKind::Dir, 0)));
+        r.push(rec(8, Some(7), cloud("movie.mkv", 500)));
+        r.push(rec(9, Some(2), cloud("note.txt", 5)));
+        Tree::from_records(r)
+    }
+
+    #[test]
+    fn subtree_sizes_by_allocated_plus_cloud_only() {
+        let t = with_cloud();
+        // William: 160 allocated + 505 cloud-only = 665; 0.1 => threshold 67.
+        let s = subtree(&t, 2, 2, 0.1, None).unwrap();
+        let names: Vec<_> = s.children.iter().map(|c| c.name.as_str()).collect();
+        // (c) ordered by allocated + cloud-only, (a) the cloud-only folder is kept.
+        assert_eq!(names, ["OneDrive", "a.mp4", "Other"]);
+        let od = &s.children[0];
+        assert_eq!(od.allocated, 0);
+        assert_eq!(od.cloud_only, 500);
+        assert_eq!(
+            od.children.len(),
+            1,
+            "its cloud-only file is listed by name"
+        );
+        // (b) small cloud-only files still fold, and their bytes go to the fold node.
+        let fold = s.children.last().unwrap();
+        assert_eq!(fold.id, TreeDto::fold_id(2));
+        assert_eq!(fold.child_count, 3); // Docs, b.txt, note.txt
+        assert_eq!(fold.allocated, 60);
+        assert_eq!(fold.cloud_only, 5);
+        // Lists still sort by allocated only.
+        let by_alloc: Vec<_> = children(&t, 2, SortKey::Allocated, 0, 10, None)
+            .into_iter()
+            .map(|n| n.name)
+            .collect();
+        assert_eq!(by_alloc[0], "a.mp4");
     }
 
     #[test]
