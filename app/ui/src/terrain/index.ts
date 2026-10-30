@@ -17,6 +17,8 @@ import { css, paletteFor } from "./palette";
 import { FpsWatch } from "./fps";
 import { Flat2D } from "./flat2d";
 import { Overlay, PIN_LABEL, formatBytes } from "./overlay";
+import type { Trail } from "./trail";
+import { trailOf } from "./trail";
 import { Scene3D } from "./scene3d";
 import { AutoSpin, VIEW_MS } from "./rotation";
 
@@ -44,7 +46,9 @@ class Terrain implements TerrainHandle {
   private selId: NodeId | null = null;
   private selPath: NodeId[] | undefined;
   private selIdx = -1;
-  private routeStart: [number, number] | null = null;
+  /** Route stops in square coordinates: the rim entry, then one per hop after the root. */
+  private routeStops: [number, number][] = [];
+  private trail: Trail | null = null;
   private hoverIdx = -1;
   private fps = new FpsWatch();
   private autoFlatAllowed = true;
@@ -82,6 +86,8 @@ class Terrain implements TerrainHandle {
       onPinEnter: (i, ev) => this.pinHover(i, ev),
       onPinLeave: () => this.setHover(-1, 0, 0),
       onPinClick: (i) => { const p = this.pins[i]; if (p) { this.pick(p.pin.nodeId); this.flyTo(p.pin.nodeId); } },
+      onTrailPick: (k) => this.trailPick(k),
+      onTrailHover: (k) => this.trailHover(k),
     });
     this.flatMode = opts.flat || !this.scene;
     if (this.scene) {
@@ -146,6 +152,7 @@ class Terrain implements TerrainHandle {
     }
     this.overlay.setPins(this.pins.map((p) => ({ kind: p.pin.kind, label: p.pin.label })));
     this.applyDim();
+    this.applyTrail(); // the card names the selection's pin, if it has one
     this.overlayDirty = true;
   }
 
@@ -217,10 +224,40 @@ class Terrain implements TerrainHandle {
     this.scene?.setRoute(stops.length >= 2 ? routePoints(this.hm, stops) : null);
     this.flat.setSelected(node);
     this.flat.setRoute(stops);
-    this.routeStart = stops.length >= 2 ? stops[0] : null;
-    this.overlay.setStartLabel(this.routeStart ? shortRoot(this.tree.name) : null);
+    this.routeStops = stops.length >= 2 ? stops : [];
+    this.overlay.setStartLabel(this.routeStops.length ? shortRoot(this.tree.name) : null);
+    this.trail = node && this.selId !== null ? trailOf(this.layout, this.selIdx, this.selId, this.selPath) : null;
+    this.applyTrail();
     this.applyDim();
     this.overlayDirty = true;
+  }
+
+  /** Waypoint markers on the map and the trail card (full view only; the compact card stays quiet). */
+  private applyTrail(): void {
+    const t = this.compact || !this.routeStops.length ? null : this.trail;
+    this.overlay.setWaypoints(t ? this.routeStops.length - 1 : 0);
+    const pin = t ? this.opts.pins.find((p) => p.nodeId === this.selId) : undefined;
+    this.overlay.setTrail(t ? { trail: t, rootBadge: shortRoot(this.tree.name), tag: pin ? PIN_LABEL[pin.kind] : null } : null);
+    this.overlayDirty = true;
+  }
+
+  /** Trail card row or waypoint: the selection's own row frames it again, any other hop selects that folder. */
+  private trailPick(k: number): void {
+    const hop = this.trail?.hops[k];
+    if (!hop) return;
+    if (k === this.trail!.hops.length - 1 && this.selId !== null) this.flyTo(this.selId);
+    else this.pick(hop.id);
+  }
+
+  private trailHover(k: number): void {
+    const hop = k >= 0 ? this.trail?.hops[k] : undefined;
+    const idx = hop ? hop.idx : -1;
+    const node = idx > 0 ? this.layout.nodes[idx] : null;
+    this.overlay.hotHop(hop ? k : -1);
+    if (idx === this.hoverIdx) return;
+    this.hoverIdx = idx;
+    this.scene?.setHovered(node);
+    this.flat.setHovered(node);
   }
 
   /** Pins outside the selected subtree fade back. */
@@ -338,11 +375,16 @@ class Terrain implements TerrainHandle {
       const [hx, hy, z, vis] = at(sx, sy, p.lift, this.compact ? 16 : 24 + (i % 3) * 6);
       this.overlay.placePin(this.overlay.pins[i], flat ? gx : hx, hy, gy, z, vis);
     });
-    if (this.routeStart) {
-      const [sx, sy] = this.routeStart;
+    if (this.routeStops.length) {
+      const [sx, sy] = this.routeStops[0];
       const [, gy] = at(sx, sy, 0, 0);
       const [hx, hy, z, vis] = at(sx, sy, 0.16, 20);
       this.overlay.placePin(this.overlay.start, hx, hy, gy, z, vis);
+      this.overlay.waypoints.forEach((_, i) => {
+        const [wx, wy] = this.routeStops[i + 1];
+        const [x, y, d, v] = at(wx, wy, 0.02, 0);
+        this.overlay.placeWaypoint(i, x, y, d, v);
+      });
     }
     this.labels.forEach((l, i) => {
       const x = Math.cos(l.angle) * 1.3, z = Math.sin(l.angle) * 1.3;
