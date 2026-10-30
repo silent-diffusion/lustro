@@ -124,3 +124,157 @@
   font-weight: 650;
   overflow-wrap: anywhere;
 }
+
+/* Route: the start marker is hop 0, numbered waypoints mark each folder the route passes. */
+.svt-pin.svt-start.svt-hot .svt-head { box-shadow: 0 0 0 3px var(--svt-accent); }
+.svt-wp {
+  position: absolute;
+  left: 0;
+  top: 0;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  box-sizing: border-box;
+  border-radius: 8px;
+  display: grid;
+  place-items: center;
+  background: var(--svt-surface);
+  border: 1.5px solid var(--svt-text);
+  color: var(--svt-text);
+  font: 700 9px/1 var(--font-ui, system-ui, sans-serif);
+  font-variant-numeric: tabular-nums;
+  pointer-events: auto;
+  cursor: pointer;
+  will-change: transform;
+}
+.svt-wp.svt-wp-end { background: var(--svt-accent); border-color: var(--svt-accent); color: var(--svt-pin-ink); }
+.svt-wp.svt-hot { box-shadow: 0 0 0 3px var(--svt-accent); }
+
+/* Trail card: the route as a list of waypoints, top right of the map. */
+.svt-trail {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 15000;
+  width: 260px;
+  max-width: calc(100% - 20px);
+  max-height: calc(100% - 20px);
+  overflow-y: auto;
+  box-sizing: border-box;
+  border-radius: 10px;
+  background: var(--svt-surface);
+  border: 1px solid var(--svt-stroke);
+  color: var(--svt-text2);
+  font-size: 12px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+  pointer-events: auto;
+}
+.svt-trail button {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  margin: 0;
+  text-align: left;
+  cursor: pointer;
+}
+.svt-trail button:focus-visible { outline: 2px solid var(--svt-accent); outline-offset: -2px; border-radius: 8px; }
+.svt-trail .svt-trail-head {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  color: var(--svt-text);
+  font-weight: 650;
+}
+.svt-trail-count { color: var(--svt-text2); font-weight: 500; margin-right: auto; }
+.svt-chev { display: grid; color: var(--svt-text2); transition: transform 0.15s; }
+.svt-chev svg { width: 14px; height: 14px; }
+.svt-trail-head[aria-expanded="false"] .svt-chev { transform: rotate(-90deg); }
+.svt-trail-list {
+  list-style: none;
+  margin: 0;
+  padding: 0 4px 6px;
+  position: relative;
+}
+/* The dotted line joining the waypoint badges, like the route on the map. */
+.svt-trail-list::before {
+  content: "";
+  position: absolute;
+  left: 18px;
+  top: 12px;
+  bottom: 16px;
+  border-left: 1.5px dashed var(--svt-text2);
+  opacity: 0.6;
+}
+.svt-hop {
+  position: relative;
+  width: 100%;
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 8px;
+  padding: 5px 6px 7px;
+  border-radius: 8px;
+}
+.svt-hop:hover,
+.svt-hop.svt-hot { background: color-mix(in srgb, var(--svt-text) 8%, transparent); }
+.svt-badge {
+  position: relative;
+  justify-self: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 3px;
+  box-sizing: border-box;
+  border-radius: 9px;
+  display: grid;
+  place-items: center;
+  background: var(--svt-surface);
+  border: 1.5px solid var(--svt-text);
+  color: var(--svt-text);
+  font: 700 9px/1 var(--font-ui, system-ui, sans-serif);
+  font-variant-numeric: tabular-nums;
+}
+.svt-badge-root { background: var(--svt-text); color: var(--svt-surface-ink); }
+.svt-here .svt-badge { background: var(--svt-accent); border-color: var(--svt-accent); color: var(--svt-pin-ink); }
+.svt-hop-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--svt-text);
+}
+.svt-here .svt-hop-name { font-weight: 650; }
+.svt-hop-meta { color: var(--svt-text2); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.svt-tag {
+  grid-column: 2 / -1;
+  justify-self: start;
+  margin-top: 3px;
+  padding: 1px 6px;
+  border-radius: 6px;
+  border: 1px solid var(--svt-stroke);
+  font-size: 11px;
+  color: var(--svt-text2);
+}
+/* Share of the parent folder: a thin bar under the name. */
+.svt-share {
+  position: absolute;
+  left: 38px;
+  bottom: 2px;
+  height: 2px;
+  max-width: calc(100% - 44px);
+  border-radius: 1px;
+  background: var(--svt-text2);
+  opacity: 0.55;
+}
+.svt-here .svt-share { background: var(--svt-accent); opacity: 0.9; }
+.svt-trail .svt-gap {
+  width: 100%;
+  padding: 3px 6px 3px 38px;
+  border-radius: 8px;
+  color: var(--svt-text2);
+  font-style: italic;
+}
+.svt-trail .svt-gap:hover { color: var(--svt-text); }
+.svt-trail-note { padding: 2px 6px 2px 38px; color: var(--svt-text2); font-size: 11px; }
