@@ -5,6 +5,19 @@ version is also what the app shows when it offers that update.
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-10-29
+
+### What's new
+- **Route card** on the full terrain view. Clicking something now lists every folder on the way from the
+  drive down to it, numbered to match dots along the route on the map. Each row shows the
+  folder's size and its share of the folder above. Click a row or a dot to go to that folder.
+
+### Fixed
+- Cloud-only folders now show up as lakes on the terrain, and by name in the other charts,
+  instead of being lumped into "Other". Folders that have never been opened on this PC still
+  aren't counted yet, because looking inside them would make your cloud provider download their
+  file list.
+
 ## [0.1.1] - 2026-10-29
 
 ### What's new

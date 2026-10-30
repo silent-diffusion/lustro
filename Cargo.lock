@@ -2063,7 +2063,7 @@ checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
 
 [[package]]
 name = "lustro-app"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "lustro-cloud",
  "lustro-core",
@@ -2080,7 +2080,7 @@ dependencies = [
 
 [[package]]
 name = "lustro-cloud"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "libc",
  "lustro-core",
@@ -2092,7 +2092,7 @@ dependencies = [
 
 [[package]]
 name = "lustro-core"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "bitflags 2.13.2",
  "blake3",
@@ -2105,7 +2105,7 @@ dependencies = [
 
 [[package]]
 name = "lustro-platform"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "libc",
  "lustro-cloud",
@@ -2122,7 +2122,7 @@ dependencies = [
 
 [[package]]
 name = "lustro-scan"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "libc",
  "lustro-core",
@@ -2134,7 +2134,7 @@ dependencies = [
 
 [[package]]
 name = "lustro-scan-helper"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "lustro-core",
  "lustro-scan",
